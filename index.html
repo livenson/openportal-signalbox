@@ -1,0 +1,639 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>signalbox — OpenPortal</title>
+<link rel="stylesheet" href="https://unpkg.com/@xyflow/react@12.11.2/dist/style.css">
+<style>
+  :root {
+    --bg: #0e1116; --card: #161b22; --line: #262d36;
+    --text: #e6edf3; --muted: #8b949e;
+    --ok: #3fb950; --bad: #f85149; --warn: #d29922;
+  }
+  * { box-sizing: border-box; }
+  html, body, #root { margin: 0; height: 100%; }
+  /* Docked inspector: the canvas gives up width rather than being covered,
+     so the node you just clicked never ends up hidden behind the panel. */
+  #root { display: flex; }
+  #canvas { flex: 1; min-width: 0; height: 100%; position: relative; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 13px/1.45 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+  }
+  .react-flow__node { cursor: pointer; }
+  .react-flow__handle { opacity: 0; }
+  .edge-count { fill: #58a6ff; font-size: 10.5px; font-weight: 600; }
+
+  /* Node card: status as a left border, not a flood of colour. */
+  .agent {
+    width: 210px; background: var(--card);
+    border: 1px solid var(--line); border-left: 3px solid var(--muted);
+    border-radius: 8px; padding: 9px 11px;
+  }
+  .agent.ok   { border-left-color: var(--ok); }
+  .agent.warn { border-left-color: var(--warn); }
+  .agent.down { border-left-color: var(--bad); }
+  .agent.sel  { border-color: #58a6ff; }
+  .agent .top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .agent .name {
+    font-weight: 600; letter-spacing: -0.01em;
+    display: inline-flex; align-items: center; gap: 7px;
+  }
+  .agent .icon { color: var(--muted); flex: none; }
+  .agent .chip {
+    font-size: 10.5px; color: var(--muted); border: 1px solid var(--line);
+    border-radius: 999px; padding: 0 6px;
+  }
+  .agent .metrics {
+    display: flex; gap: 12px; margin-top: 7px;
+    font-size: 11.5px; color: var(--muted);
+  }
+  .agent .metrics b { color: var(--text); font-weight: 600; }
+  .agent .metrics .bad b { color: var(--bad); }
+
+  #side {
+    flex: none; width: 380px; height: 100%;
+    background: var(--card); border-left: 1px solid var(--line);
+    padding: 14px 16px; overflow-y: auto; display: none;
+  }
+  #side.on { display: block; }
+  #side h2 { margin: 0 0 2px; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  #side h2 .icon { color: var(--muted); }
+  #side h2 .arrow { color: var(--muted); font-weight: 400; }
+  .react-flow__edge { cursor: pointer; }
+  #side .path { color: var(--muted); font-size: 11.5px; margin-bottom: 10px; }
+  #side .filters { display: flex; gap: 6px; margin-bottom: 4px; }
+  #side .filters select, #side .filters input {
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px;
+    padding: 4px 7px; font: inherit; font-size: 11.5px;
+  }
+  #side .filters input { flex: 1; min-width: 0; }
+  #side .filters input::placeholder { color: var(--muted); }
+  #side .hint { color: var(--muted); font-size: 11px; margin-top: 4px; }
+  #side pre.log {
+    margin: 0; background: var(--bg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 8px; font-size: 11px; line-height: 1.5;
+    max-height: 300px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+    font-family: ui-monospace, Menlo, monospace; color: #9fb0c3;
+  }
+  #side h3 {
+    font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--muted); margin: 14px 0 5px;
+  }
+  #side .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; font-size: 12px; }
+  #side .kv span:nth-child(odd) { color: var(--muted); }
+  #side ul { margin: 0; padding-left: 15px; font-size: 12px; }
+  #side li { margin-bottom: 3px; }
+  #side .none { color: var(--muted); font-style: italic; font-size: 12px; }
+  #hud {
+    position: fixed; top: 12px; left: 12px; z-index: 5;
+    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 12px; font-size: 12px; color: var(--muted);
+  }
+  #hud b { color: var(--text); }
+  #hud .brand { color: var(--text); font-weight: 600; letter-spacing: -0.01em; }
+  #hud .brand::after { content: ' · '; color: var(--muted); font-weight: 400; }
+
+  #console {
+    position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 5;
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 12px;
+  }
+  #console.ro { opacity: .75; }
+  #console .row { display: flex; gap: 8px; align-items: center; }
+  #console input {
+    flex: 1; min-width: 0; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px;
+    font: inherit; font-family: ui-monospace, Menlo, monospace; font-size: 12px;
+  }
+  #console button {
+    background: #1f6feb; color: #fff; border: 0; border-radius: 6px;
+    padding: 7px 14px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  #console button:disabled { background: var(--line); color: var(--muted); cursor: default; }
+  #console .presets { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+  #console .preset {
+    background: var(--bg); border: 1px solid var(--line); color: var(--muted);
+    border-radius: 999px; padding: 2px 9px; font-size: 11px; cursor: pointer;
+  }
+  #console .preset:hover { color: var(--text); border-color: #58a6ff; }
+  #console .preset.reg { border-color: #2d4f76; color: #79c0ff; }
+  #console .preset:disabled { opacity: .5; cursor: default; }
+  #console .out {
+    margin-top: 8px; max-height: 148px; overflow: auto;
+    font-family: ui-monospace, Menlo, monospace; font-size: 11.5px;
+  }
+  #console .out div { padding: 2px 0; border-top: 1px solid var(--line); }
+  #console .out .cmd { color: var(--text); }
+  #console .out .ok { color: var(--ok); }
+  #console .out .err { color: var(--bad); }
+  #console .out .meta { color: var(--muted); }
+  #console .why { color: var(--muted); font-size: 11px; margin-top: 6px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="importmap">
+{ "imports": {
+  "react": "https://esm.sh/react@18.3.1",
+  "react-dom": "https://esm.sh/react-dom@18.3.1",
+  "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+  "@xyflow/react": "https://esm.sh/@xyflow/react@12.11.2?deps=react@18.3.1,react-dom@18.3.1",
+  "htm": "https://esm.sh/htm@3.1.1",
+  "@dagrejs/dagre": "https://esm.sh/@dagrejs/dagre@1.1.4"
+} }
+</script>
+
+<script type="module">
+// Spike: can React Flow work with no build step? JSX is replaced by htm
+// tagged templates, everything else comes from esm.sh as plain ES modules.
+import React, { useCallback, useEffect, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import { ReactFlow, Background, Controls, Handle, Position,
+         BaseEdge, getBezierPath } from '@xyflow/react';
+import htm from 'htm';
+import dagre from '@dagrejs/dagre';
+
+const html = htm.bind(React.createElement);
+
+const NODE_W = 210, NODE_H = 64;
+
+// One glyph per agent role, so the kind of component reads before the text
+// does. Deliberately drawn in the muted colour: the icon carries *identity*,
+// the left border carries *status* — mixing the two makes both harder to read.
+const ICONS = {
+  bridge:     'M1.5 11h13 M5 11V7.5 M11 11V7.5 M1.5 7.5c3-3.5 10-3.5 13 0',
+  portal:     'M3.5 14V5.5a4.5 4.5 0 0 1 9 0V14 M1.5 14h13 M9.8 9.5h.01',
+  provider:   'M4.5 12.5h7a2.75 2.75 0 0 0 .2-5.5 4 4 0 0 0-7.6-1 2.75 2.75 0 0 0 .4 6.5z',
+  platform:   'M8 1.8l6 2.9-6 2.9-6-2.9 6-2.9 M2 8l6 2.9L14 8 M2 11.2l6 2.9 6-2.9',
+  instance:   'M2.2 3.2h11.6v4H2.2z M2.2 8.8h11.6v4H2.2z M4.5 5.2h.01 M4.5 10.8h.01',
+  filesystem: 'M1.8 4.2h4.1l1.3 1.7h7V12.6a.6.6 0 0 1-.6.6H2.4a.6.6 0 0 1-.6-.6z',
+  account:    'M8 8.2a2.6 2.6 0 1 0 0-5.2 2.6 2.6 0 0 0 0 5.2z M2.8 13.6c0-2.6 2.3-4.1 5.2-4.1s5.2 1.5 5.2 4.1',
+  scheduler:  'M8 14.2A6.2 6.2 0 1 0 8 1.8a6.2 6.2 0 0 0 0 12.4z M8 4.6V8.2l2.4 1.7',
+  unknown:    'M8 14.2A6.2 6.2 0 1 0 8 1.8a6.2 6.2 0 0 0 0 12.4z M8 11.4h.01 M6.2 6.3a1.9 1.9 0 1 1 2.4 2c-.5.2-.6.6-.6 1',
+};
+
+function Icon({ type }) {
+  const d = ICONS[type] || ICONS.unknown;
+  return html`
+    <svg class="icon" viewBox="0 0 16 16" width="15" height="15" fill="none"
+         stroke="currentColor" stroke-width="1.4"
+         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      ${d.split(' M').map((seg, i) => html`<path key=${i} d=${i ? `M${seg}` : seg} />`)}
+    </svg>`;
+}
+
+function stateOf(n) {
+  if (!n.connected) return 'down';
+  return (n.totals?.failed ?? 0) > 0 ? 'warn' : 'ok';
+}
+
+/** Node body: the numbers you triage on, without a click. */
+function AgentNode({ data, selected }) {
+  const n = data.node;
+  const failed = n.totals?.failed ?? 0;
+  return html`
+    <div class=${`agent ${stateOf(n)}${selected ? ' sel' : ''}`}>
+      <${Handle} type="target" position=${Position.Left} />
+      <div class="top">
+        <span class="name"><${Icon} type=${n.type} />${n.name}</span>
+        <span class="chip">${n.type}</span>
+      </div>
+      <div class="metrics">
+        <span>run <b>${n.jobs?.running ?? 0}</b></span>
+        <span class=${failed ? 'bad' : ''}>fail <b>${failed}</b></span>
+        <span>${(n.job_time_mean_ms ?? 0).toFixed(0)} ms</span>
+      </div>
+      <${Handle} type="source" position=${Position.Right} />
+    </div>`;
+}
+
+// A short tour of the instruction grammar. {dest} is filled in from whichever
+// agent is selected, so the commands stay runnable as you click around.
+const PRESETS = [
+  // [label, agent role that can answer it, template, why]
+  //
+  // {t} resolves to an agent of the given role, {p} to the portal's own name
+  // and {o} to a registered offering. The role matters: routers (provider,
+  // platform) and the bridge forward instructions rather than executing them,
+  // so aiming any of these at one errors. They share a project so the list
+  // reads as a walkthrough — run it top to bottom.
+  ['add_project', 'instance', '{t} add_project sbdemo.{p}',
+   'create the demo project — run this one first'],
+  ['get_project_mapping', 'instance', '{t} get_project_mapping sbdemo.{p}',
+   'portal id -> local group'],
+  ['add_user', 'instance', '{t} add_user alice.sbdemo.{p}',
+   'add a user to that project'],
+  ['get_usage_report', 'instance', '{t} get_usage_report sbdemo.{p} this_month',
+   'usage for a period (needs the project to exist)'],
+  ['get_limit', 'instance', '{t} get_limit sbdemo.{p}',
+   'current allocation limit'],
+  ['get_projects', 'portal', '{p}.{o} get_projects {p}',
+   'incoming: answered by the portal software itself — registers an offering first'],
+  ['bad destination', 'instance', '{t}-nosuch add_project x.{p}',
+   'see what an unroutable destination looks like'],
+];
+
+const nodeTypes = { agent: AgentNode };
+
+/**
+ * Edge that shows work moving through it.
+ *
+ * The bridge exposes no per-edge counter, so "traffic" is the rise in the
+ * downstream agent's completed count between two polls — honest as
+ * "this hop carried N jobs since the last refresh", not as a per-job trace.
+ * Jobs here finish in milliseconds, so a purely live view would almost always
+ * be empty; the dots keep running for a few seconds after the work lands.
+ */
+function FlowEdge({ id, sourceX, sourceY, targetX, targetY,
+                    sourcePosition, targetPosition, style, data }) {
+  const [path] = getBezierPath({
+    sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition,
+  });
+  const count = data?.count ?? 0;
+  const dots = count ? Math.min(count, 4) : 0;
+
+  return html`
+    <${React.Fragment}>
+      <${BaseEdge} id=${id} path=${path} style=${style} />
+      ${dots > 0 && html`
+        <${React.Fragment}>
+          ${Array.from({ length: dots }, (_, i) => html`
+            <circle key=${i} r="3.2" fill="#58a6ff" opacity="0.9">
+              <animateMotion dur="1.5s" repeatCount="indefinite"
+                             begin=${`${i * 0.34}s`} path=${path} />
+            </circle>`)}
+          <text class="edge-count" x=${(sourceX + targetX) / 2}
+                y=${(sourceY + targetY) / 2 - 9} text-anchor="middle">+${count}<//>
+        <//>`}
+    <//>`;
+}
+
+const edgeTypes = { flow: FlowEdge };
+
+/** Dagre gives a deterministic layered layout that matches the hop chain. */
+function layout(nodes, edges) {
+  const g = new dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
+  g.setGraph({ rankdir: 'LR', nodesep: 26, ranksep: 70 });
+  nodes.forEach((n) => g.setNode(n.id, { width: NODE_W, height: NODE_H }));
+  edges.forEach((e) => g.setEdge(e.source, e.target));
+  dagre.layout(g);
+  return nodes.map((n) => {
+    const p = g.node(n.id);
+    return { ...n, position: { x: p.x - NODE_W / 2, y: p.y - NODE_H / 2 } };
+  });
+}
+
+function App() {
+  const [nodes, setNodes] = useState([]);
+  const [edges, setEdges] = useState([]);
+  const [summary, setSummary] = useState('loading…');
+  const [selected, setSelected] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [rf, setRf] = useState(null);
+  const [level, setLevel] = useState('');
+  const [q, setQ] = useState('');
+  const [cmd, setCmd] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [history, setHistory] = useState([]);
+  const [readonly, setReadonly] = useState(false);
+  const [offering, setOffering] = useState('');
+  const [link, setLink] = useState(null);      // {source, target, count}
+  const [linkLog, setLinkLog] = useState(null);
+  // completed-count per agent from the previous poll, plus a short-lived
+  // record of recent traffic so a burst stays visible after it finishes.
+  const prevCompleted = React.useRef(new Map());
+  const recent = React.useRef(new Map());
+
+  const nodesById = React.useMemo(
+    () => new Map(nodes.map((n) => [n.id, n.data.node])), [nodes]);
+  const nodesByName = React.useMemo(
+    () => new Map(nodes.map((n) => [n.data.node.name, n.data.node])), [nodes]);
+
+  const load = useCallback(async () => {
+    const res = await fetch('/api/topology');
+    const data = await res.json();
+    if (!data.ok) { setSummary(`bridge unreachable: ${data.error}`); return; }
+
+    // Throughput since the last poll, kept alive briefly so fast jobs are seen.
+    const now = Date.now();
+    for (const n of data.nodes) {
+      const done = n.totals?.completed ?? 0;
+      const before = prevCompleted.current.get(n.name);
+      if (before !== undefined && done > before) {
+        recent.current.set(n.name, { count: done - before, at: now });
+      }
+      prevCompleted.current.set(n.name, done);
+    }
+    for (const [name, hit] of recent.current) {
+      if (now - hit.at > 12000) recent.current.delete(name);
+    }
+
+    // Work executed on a leaf must have crossed every hop above it, but only
+    // the executing agent's completed counter moves — routers like provider
+    // and clusters never increment. So push each agent's throughput up its
+    // own path, or the middle of the chain looks idle while work flows.
+    const parent = new Map(data.edges.map((e) => [e.target, e.source]));
+    const carried = new Map();
+    for (const n of data.nodes) {
+      const own = (recent.current.get(n.name)?.count ?? 0) + (n.jobs?.running ?? 0);
+      if (!own) continue;
+      for (let at = n.name; at; at = parent.get(at)) {
+        carried.set(at, (carried.get(at) ?? 0) + own);
+      }
+    }
+
+    const byName = new Map(data.nodes.map((n) => [n.name, n]));
+    const rfNodes = data.nodes.map((n) => ({
+      id: n.id, type: 'agent', data: { node: n }, position: { x: 0, y: 0 },
+    }));
+    const rfEdges = data.edges.map((e) => {
+      const target = byName.get(e.target);
+      const count = carried.get(e.target) ?? 0;
+      return {
+        id: `${e.source}->${e.target}`,
+        type: 'flow',
+        source: byName.get(e.source)?.id, target: target?.id,
+        data: { count },
+        style: {
+          stroke: !target?.connected ? '#f85149' : count ? '#1f6feb' : '#30363d',
+          strokeWidth: count ? 2 : 1.5,
+        },
+      };
+    }).filter((e) => e.source && e.target);
+
+    setNodes(layout(rfNodes, rfEdges));
+    setEdges(rfEdges);
+    const up = data.nodes.filter((n) => n.connected).length;
+    const failed = data.nodes.reduce((a, n) => a + (n.totals?.failed ?? 0), 0);
+    setSummary(html`<b>${up}/${data.nodes.length}</b> connected · <b>${failed}</b> failures`);
+  }, []);
+
+  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
+  useEffect(() => {
+    fetch('/api/config').then((r) => r.json()).then((c) => setReadonly(Boolean(c.readonly)))
+      .catch(() => {});
+  }, []);
+
+  const submit = useCallback(async () => {
+    const command = cmd.trim();
+    if (!command || busy) return;
+    setBusy(true);
+    try {
+      const res = await fetch('/api/run', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command }),
+      });
+      const out = await res.json();
+      setHistory((h) => [{ command, ...out }, ...h].slice(0, 25));
+      load();   // a job usually moves a counter, so refresh the picture
+    } catch (err) {
+      setHistory((h) => [{ command, ok: false, error: err.message }, ...h].slice(0, 25));
+    } finally {
+      setBusy(false);
+    }
+  }, [cmd, busy, load]);
+
+  const agents = React.useMemo(() => nodes.map((n) => n.data.node), [nodes]);
+  // Presets are written against whichever agent is selected, defaulting to the
+  // cluster instance since that is where most instructions are aimed.
+  // Everything is derived from the live topology: the portal names itself, and
+  // instructions default to the instance agent that executes them.
+  const portal = agents.find((n) => n.type === 'portal')?.name ?? 'portal';
+  const instanceId = agents.find((n) => n.type === 'instance')?.id;
+  const dest = (selected?.id && selected.id !== 'bridge' ? selected.id : instanceId)
+    ?? agents[0]?.id ?? '';
+  // Resolve each preset against an agent that can actually answer it: prefer
+  // the selection when its role fits, otherwise fall back to the first agent
+  // of the required role. Without this, selecting a router silently produces
+  // commands that are guaranteed to fail.
+  const roleTarget = useCallback((role) => {
+    if (!role) return null;
+    if (selected?.type === role) return selected.id;
+    return agents.find((n) => n.type === role)?.id ?? dest;
+  }, [agents, selected, dest]);
+
+  const build = useCallback((preset, offeringName) => {
+    const [, role, tpl] = preset;
+    return tpl
+      .replaceAll('{t}', roleTarget(role) ?? dest)
+      .replaceAll('{p}', portal)
+      .replaceAll('{o}', offeringName || offering);
+  }, [roleTarget, dest, portal, offering]);
+
+  const instance = instanceId;
+
+  const registerOffering = useCallback(async () => {
+    setBusy(true);
+    try {
+      const res = await fetch('/api/run', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ offering: 'sbdemo' }),
+      });
+      const out = await res.json();
+      if (out.ok) setOffering('sbdemo');
+      setHistory((h) => [{
+        command: 'register offering sbdemo',
+        ok: out.ok, state: out.ok ? 'complete' : 'error',
+        result: out.ok ? `addressable as ${out.address}` : '', error: out.error,
+      }, ...h].slice(0, 25));
+      return out.ok ? 'sbdemo' : null;
+    } finally { setBusy(false); }
+  }, []);
+
+  // A preset must never hand back a command that cannot run, so one that needs
+  // a virtual offering agent registers it on the spot rather than leaving a
+  // placeholder in the box.
+  const pickPreset = useCallback(async (preset) => {
+    let name = offering;
+    if (preset[2].includes('{o}') && !name) {
+      name = await registerOffering();
+      if (!name) return;
+    }
+    setCmd(build(preset, name));
+  }, [offering, registerOffering, build]);
+
+
+  useEffect(() => {
+    // The canvas loses width when the inspector docks, so re-fit or the node
+    // just clicked can end up under the panel edge.
+    if (!rf) return;
+    const t = setTimeout(() => rf.fitView({ padding: 0.16, duration: 250 }), 60);
+    return () => clearTimeout(t);
+  }, [rf, selected, nodes.length]);
+
+  // Filters are applied by the agent itself (the diagnostics API takes a level
+  // and a substring), so narrowing does not just hide rows locally — it asks
+  // for less and keeps long buffers readable.
+  const loadDetail = useCallback(async (node, lvl, needle) => {
+    if (!node) return;
+    const params = new URLSearchParams({ path: node.id });
+    if (lvl) params.set('level', lvl);
+    if (needle) params.set('q', needle);
+    const res = await fetch(`/api/agent?${params}`);
+    setDetail(await res.json());
+  }, []);
+
+  /**
+   * An edge is a peer connection, and both ends log about it by name —
+   * handshakes, authentication, watchdog timeouts, reconnects. Asking each
+   * agent for the lines mentioning the other reconstructs the history of that
+   * one link, which is otherwise spread across two containers.
+   */
+  const onEdgeClick = useCallback(async (_evt, edge) => {
+    const src = nodesByName.get(edge.source.split('.').pop() || edge.source)
+             ?? nodesById.get(edge.source);
+    const dst = nodesById.get(edge.target);
+    if (!src || !dst) return;
+
+    setSelected(null);
+    setLink({ source: src, target: dst, count: edge.data?.count ?? 0 });
+    setLinkLog(null);
+
+    const ask = async (node, peerName) => {
+      const params = new URLSearchParams({ path: node.id, q: peerName });
+      const res = await fetch(`/api/agent?${params}`);
+      const data = await res.json();
+      return (data.logs || []).map((l) => ({ ...l, from: node.name }));
+    };
+    const [a, b] = await Promise.all([ask(src, dst.name), ask(dst, src.name)]);
+    setLinkLog([...a, ...b].sort((x, y) => x.sort - y.sort).slice(-60));
+    // Depends on the lookups: with an empty list the handler would close over
+    // the first render's empty maps and never resolve either endpoint.
+  }, [nodesById, nodesByName]);
+
+  const onNodeClick = useCallback(async (_evt, node) => {
+    setLink(null);
+    setSelected(node.data.node);
+    setDetail(null);
+    loadDetail(node.data.node, level, q);
+  }, [loadDetail, level, q]);
+
+  // Debounced so typing does not fire a signed call per keystroke.
+  useEffect(() => {
+    if (!selected) return;
+    const t = setTimeout(() => loadDetail(selected, level, q), 250);
+    return () => clearTimeout(t);
+  }, [selected, level, q, loadDetail]);
+
+  const list = (items) => items?.length
+    ? html`<ul>${items.slice(0, 5).map((x, i) => html`<li key=${i}>${x}</li>`)}</ul>`
+    : html`<div class="none">none</div>`;
+
+  return html`
+    <${React.Fragment}>
+      <div id="canvas">
+      <div id="hud"><span class="brand">signalbox</span>${summary}</div>
+      <${ReactFlow}
+        nodes=${nodes} edges=${edges}
+        nodeTypes=${nodeTypes} edgeTypes=${edgeTypes}
+        onNodeClick=${onNodeClick} onEdgeClick=${onEdgeClick}
+        onInit=${setRf} fitView
+        proOptions=${{ hideAttribution: true }}
+        nodesDraggable=${false} nodesConnectable=${false}>
+        <${Background} color="#1c2430" gap=${22} />
+        <${Controls} showInteractive=${false} />
+      <//>
+      <div id="console" class=${readonly ? 'ro' : ''}>
+        <div class="presets">
+          <button class="preset reg" disabled=${readonly || busy}
+                  title="register a virtual offering agent so the portal can be addressed"
+                  onClick=${registerOffering}>
+            ${offering ? `offering: ${offering} ✓` : '+ register offering'}
+          </button>
+          ${PRESETS.map((preset) => html`
+            <button key=${preset[0]} class="preset" title=${preset[3]}
+                    onClick=${() => pickPreset(preset)}>${preset[0]}</button>`)}
+        </div>
+        <div class="row">
+          <input value=${cmd} placeholder=${readonly
+              ? 'read-only: set SIGNALBOX_READONLY=0 to submit instructions'
+              : `${dest} add_project sbdemo.${portal}`}
+            disabled=${readonly}
+            onChange=${(e) => setCmd(e.target.value)}
+            onKeyDown=${(e) => e.key === 'Enter' && submit()} />
+          <button onClick=${submit} disabled=${readonly || busy || !cmd.trim()}>
+            ${busy ? 'running…' : 'run'}
+          </button>
+        </div>
+        <div class="why">
+          presets target the instance agent <b>${instance || '—'}</b>, the one
+          that executes project and user work — routers only forward.
+          ${selected && html` selection: <b>${selected.name}</b> (${selected.type})`}
+        </div>
+        ${history.length > 0 && html`
+          <div class="out">
+            ${history.map((h, i) => html`
+              <div key=${i}>
+                <span class="cmd">${h.command}</span>
+                <span class=${h.ok ? 'ok' : 'err'}> ${h.state || (h.ok ? 'complete' : 'error')}</span>
+                <span class="meta">${h.elapsed_ms != null ? ` ${h.elapsed_ms}ms` : ''}</span>
+                ${(h.result || h.error) && html`<span class="meta"> — ${(h.result || h.error).slice(0, 200)}</span>`}
+              </div>`)}
+          </div>`}
+      </div>
+      </div>
+      <div id="side" class=${selected || link ? 'on' : ''}>
+        ${link && html`
+          <${React.Fragment}>
+            <h2>${link.source.name} <span class="arrow">⇄</span> ${link.target.name}</h2>
+            <div class="path">peer connection · ${link.target.connected ? 'connected' : 'DISCONNECTED'}</div>
+            <div class="kv">
+              <span>carried</span><span>${link.count} job(s) since last refresh</span>
+              <span>${link.source.name}</span><span>${link.source.engine} ${link.source.version}</span>
+              <span>${link.target.name}</span><span>${link.target.engine} ${link.target.version}</span>
+            </div>
+            <h3>connection log (both ends)</h3>
+            ${linkLog === null
+              ? html`<div class="none">loading…</div>`
+              : linkLog.length
+                ? html`<pre class="log">${linkLog
+                    .map((l) => `${l.time} ${l.from.padEnd(12)} ${l.level.padEnd(5)} ${l.message}`)
+                    .join('\n')}</pre>`
+                : html`<div class="none">nothing logged about this peer</div>`}
+          <//>`}
+        ${selected && html`
+          <${React.Fragment}>
+            <h2><${Icon} type=${selected.type} /> ${selected.name}</h2>
+            <div class="path">${selected.id || '(bridge)'} · ${selected.type}</div>
+            <div class="filters">
+              <select value=${level} onChange=${(e) => setLevel(e.target.value)}>
+                <option value="">all levels</option>
+                <option value="INFO">INFO</option>
+                <option value="WARN+">WARN+</option>
+                <option value="ERROR">ERROR</option>
+              </select>
+              <input placeholder="filter messages…" value=${q}
+                     onChange=${(e) => setQ(e.target.value)} />
+            </div>
+            ${(level || q) && html`<div class="hint">filtering jobs, warnings and log</div>`}
+            <div class="kv">
+              <span>engine</span><span>${selected.engine} ${selected.version}</span>
+              <span>workers</span><span>${selected.workers}</span>
+              <span>memory</span><span>${(selected.memory_bytes / 1048576).toFixed(1)} MB</span>
+              <span>cpu</span><span>${selected.cpu_percent}%</span>
+              <span>completed</span><span>${selected.totals.completed}</span>
+              <span>failed</span><span>${selected.totals.failed}</span>
+              <span>mean job</span><span>${selected.job_time_mean_ms.toFixed(0)} ms</span>
+            </div>
+            <h3>failed</h3>${list(detail?.failed_jobs)}
+            <h3>slowest</h3>${list(detail?.slowest_jobs)}
+            <h3>warnings</h3>${list(detail?.warnings)}
+            <h3>log</h3>
+            ${detail?.logs?.length
+              ? html`<pre class="log">${detail.logs.slice(-40)
+                  .map((l) => `${l.time} ${l.level.padEnd(5)} ${l.message}`).join('\n')}</pre>`
+              : html`<div class="none">no matching entries</div>`}
+          <//>`}
+      </div>
+    <//>`;
+}
+
+createRoot(document.getElementById('root')).render(html`<${App} />`);
+</script>
+</body>
+</html>
