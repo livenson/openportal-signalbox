@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 is the floor because that is what the openportal wheels target
+        # (cp310-abi3) and what the containers these tools run in provide.
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install pytest
+      # The suite fakes the compiled `openportal` module rather than installing
+      # it: the real one is useless without a live agent network to talk to.
+      - run: python -m pytest -q
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: pip install ruff
+      - run: ruff check .
+      - run: ruff format --check .
+
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: shellcheck
+        run: shellcheck run.sh tui.sh detect.sh
+      - name: launchers parse
+        run: for f in run.sh tui.sh detect.sh; do bash -n "$f"; done
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      # index.html is one file with an inline module and no build step, so
+      # there is nothing to bundle — but a syntax error would only show up in a
+      # browser, so the script is extracted and parsed here.
+      - name: viewer script parses
+        run: |
+          python3 - <<'EOF'
+          import re
+          html = open('index.html').read()
+          block = re.search(r'<script type="module">(.*?)</script>', html, re.S)
+          assert block, "no module script found in index.html"
+          open('/tmp/viewer.mjs', 'w').write(block.group(1))
+          EOF
+          node --check /tmp/viewer.mjs

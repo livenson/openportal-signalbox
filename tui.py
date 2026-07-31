@@ -61,8 +61,14 @@ class AgentsPane(Vertical):
     def on_mount(self) -> None:
         table = self.query_one("#agents", DataTable)
         for label, width in (
-            ("agent", 13), ("type", 10), ("state", 5), ("up", 6),
-            ("wrk", 3), ("run", 3), ("fail", 4), ("mean", 6),
+            ("agent", 13),
+            ("type", 10),
+            ("state", 5),
+            ("up", 6),
+            ("wrk", 3),
+            ("run", 3),
+            ("fail", 4),
+            ("mean", 6),
         ):
             table.add_column(label, width=width)
 
@@ -81,7 +87,11 @@ class LogsPane(Vertical):
     def on_mount(self) -> None:
         table = self.query_one("#logs", DataTable)
         for label, width in (
-            ("time", 9), ("agent", 13), ("level", 6), ("target", 26), ("message", 0)
+            ("time", 9),
+            ("agent", 13),
+            ("level", 6),
+            ("target", 26),
+            ("message", 0),
         ):
             table.add_column(label, width=width or None)
 
@@ -183,8 +193,7 @@ class OpenPortalTUI(App):
         search = (self.query_one("#search", Input).value or "").strip() or None
         paths = [(n["id"], n["name"]) for n in self.nodes]
         try:
-            rows = opdata.merged_logs(paths, level, search,
-                                      include_self=self.include_self)
+            rows = opdata.merged_logs(paths, level, search, include_self=self.include_self)
         except Exception:
             rows = []
         self.call_from_thread(self.apply_logs, rows)
@@ -240,8 +249,7 @@ class OpenPortalTUI(App):
             f"[dim]{node['id'] or '(bridge)'}[/]",
             "",
             f"engine   {node['engine']} {node['version']}",
-            f"uptime   {humanise(node['uptime_seconds'])}"
-            f"   workers {node['workers']}",
+            f"uptime   {humanise(node['uptime_seconds'])}   workers {node['workers']}",
             f"memory   {mb:.1f} MB   cpu {node['cpu_percent']}%",
             f"jobs     running {node['jobs']['running']}"
             f"  completed {node['totals']['completed']}"

@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
 # Shared discovery for the launcher scripts.
 #
 # signalbox has to run inside the agent network, because op-bridge listens only

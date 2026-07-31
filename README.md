@@ -136,11 +136,35 @@ above — that address has to be a registered offering, not an agent name.
 - The graph view loads React Flow and dagre from a CDN, so it needs network
   access on first load. The TUI has no such dependency.
 
+## Development
+
+```bash
+pip install pytest && python -m pytest      # 36 tests, ~5s
+ruff check . && ruff format --check .
+```
+
+The suite fakes the compiled `openportal` module rather than installing it —
+the real one is useless without a live agent network, which CI cannot provide.
+The fake deliberately keeps the bindings' quirks, most notably that
+`HealthInfo` exposes `peers` as a method while its neighbours are properties;
+smoothing that over would test the wrong thing.
+
+Tests are weighted towards what actually broke while building this: the
+property-vs-method inconsistency, reciprocal peer links that turn a tree walk
+into a loop, filtering that ate its own limit, a job reported as successful
+when it had not finished, and a cache keyed without its filters.
+
+CI additionally runs shellcheck over the launchers and parses the viewer's
+inline module with `node --check`, since a syntax error there would otherwise
+only appear in a browser.
+
 ## Status
 
 A working prototype, developed against OpenPortal 0.90.0 and a Waldur portal.
-It has no tests and is packaged as `docker run` wrappers rather than a proper
-distribution. Issues and patches welcome.
+
+**Not covered by tests:** anything that needs a live agent network, and the
+viewer's browser behaviour beyond parsing. Both were verified by hand against a
+real eight-agent stack. Issues and patches welcome.
 
 ## Licence
 

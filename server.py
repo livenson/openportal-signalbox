@@ -26,8 +26,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from opdata import (READONLY, agent_detail, bridge, run_command, sync_offering,
-                    topology)
+from opdata import READONLY, agent_detail, bridge, run_command, sync_offering, topology
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("signalbox")
@@ -90,9 +89,7 @@ class Handler(SimpleHTTPRequestHandler):
             search = (query.get("q") or [""])[0] or None
             key = f"agent:{path}:{level}:{search}"
             try:
-                self._json(
-                    cached(key, lambda: agent_detail(path, level=level, search=search))
-                )
+                self._json(cached(key, lambda: agent_detail(path, level=level, search=search)))
             except Exception as exc:
                 logger.warning("diagnostics for %r failed: %s", path, exc)
                 self._json({"ok": False, "error": str(exc)}, 200)
