@@ -1,6 +1,13 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = [".", "tests"]
+markers = [
+  "live: needs a running OpenPortal agent network — run ./live.sh, not pytest",
+]
+# The live tests cannot pass on the host: op-bridge listens only inside the
+# agent network. Deselected by default so `python -m pytest` stays the fast
+# offline suite; live.sh passes `-m live` to select them instead.
+addopts = "-m 'not live' --strict-markers"
 
 [tool.ruff]
 target-version = "py310"

@@ -1,0 +1,15 @@
+
+# Typed volume config for op-filesystem, appended to its generated config by
+# bootstrap.sh. No quota_engine: there is no Lustre or GPFS behind this stack,
+# and the agent falls back to plain directory management, which is all
+# op-cluster needs to consider its filesystem dependency satisfied.
+[user_volumes.home]
+roots = ["/home"]
+subpath = "{project}/{user}"
+permissions = "0755"
+is_home = true
+
+[project_volumes.projects]
+roots = ["/projects"]
+subpath = "{project}"
+permissions = "2770"

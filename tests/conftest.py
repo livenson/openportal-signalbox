@@ -62,7 +62,7 @@ class FakeHealthInfo:
         self.total_completed = fields.get("total_completed", 0)
         self.total_failed = fields.get("total_failed", 0)
         self.engine = "templemeads"
-        self.version = "0.90.0"
+        self.version = "0.91.0"
         self._peers = peers or {}
 
     # A method, not a property — exactly like the real bindings.

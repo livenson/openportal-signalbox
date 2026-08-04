@@ -12,7 +12,6 @@ set -euo pipefail
 # shellcheck source=detect.sh
 . "$(cd "$(dirname "$0")" && pwd)/detect.sh"
 resolve_target
-OPENPORTAL_VERSION="${OPENPORTAL_VERSION:-0.90.0}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 if [ ! -t 1 ]; then

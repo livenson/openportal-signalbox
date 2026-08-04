@@ -5,6 +5,16 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # Nightly, for the live job: the pin names a release, but the client comes
+    # from PyPI, the agent binaries from a GitHub release, and the base image
+    # moves under both — none of which a push would notice.
+    #
+    # GitHub disables a schedule after 60 days without a *commit* to the repo —
+    # issues, releases and merges do not count — and says so only on the Actions
+    # tab. On a quiet repo the nightly stops silently, so check it is still
+    # enabled before trusting a green history.
+    - cron: "0 3 * * *"
 
 permissions:
   contents: read
@@ -41,12 +51,16 @@ jobs:
 
   shell:
     runs-on: ubuntu-latest
+    env:
+      SCRIPTS: run.sh tui.sh detect.sh stack.sh live.sh stack/bootstrap.sh stack/node.sh
     steps:
       - uses: actions/checkout@v5
+      # -x so the version pin the launchers source (openportal.env) is followed
+      # rather than reported as an unresolvable source.
       - name: shellcheck
-        run: shellcheck run.sh tui.sh detect.sh
+        run: shellcheck -x $SCRIPTS
       - name: launchers parse
-        run: for f in run.sh tui.sh detect.sh; do bash -n "$f"; done
+        run: for f in $SCRIPTS; do bash -n "$f"; done
 
   web:
     runs-on: ubuntu-latest
@@ -68,3 +82,29 @@ jobs:
           open('/tmp/viewer.mjs', 'w').write(block.group(1))
           EOF
           node --check /tmp/viewer.mjs
+
+  # The only job that needs a real agent network. It builds one and runs the
+  # live suite against it, which is the only way to check the claims the
+  # offline fake can only assert about itself.
+  #
+  # Cheap enough to run everywhere the other jobs do: the agents are downloaded
+  # as prebuilt release binaries rather than compiled, so a cold run is well
+  # under a minute end to end. Nothing is cached between runs and nothing needs
+  # to be — which also means this notices a release that has moved or gone.
+  #
+  # Docker Engine, Compose v2 and Buildx are all preinstalled on the runner.
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: build and start the agent network
+        run: ./stack.sh up
+      - name: live suite
+        run: ./live.sh
+      - name: agent logs
+        if: failure()
+        run: ./stack.sh logs --no-color --tail 200
+      - name: tear down
+        if: always()
+        run: ./stack.sh down
