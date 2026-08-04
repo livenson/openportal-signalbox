@@ -33,20 +33,12 @@ import opdata
 
 pytestmark = pytest.mark.live
 
-# The instance agent, addressed by the path opdata.walk derives for it. Routers
-# above it forward; only this one and its leaves execute.
-INSTANCE = "waldur.provider.clusters.cluster"
-
-EXPECTED_PATHS = {
-    "bridge": "bridge",
-    "waldur": "waldur",
-    "provider": "waldur.provider",
-    "clusters": "waldur.provider.clusters",
-    "cluster": "waldur.provider.clusters.cluster",
-    "filesystem": "waldur.provider.clusters.cluster.filesystem",
-    "slurm": "waldur.provider.clusters.cluster.slurm",
-    "localaccount": "waldur.provider.clusters.cluster.localaccount",
-}
+# Nothing here hardcodes a shape. The stack has more than one topology and a
+# real deployment has none of them, so the expectations come from the network
+# being pointed at: which agents should be there is written into the invite
+# volume by the bootstrap, and which agent executes is whatever reports itself
+# as an instance.
+EXPECTED_AGENTS_FILE = "/inv/expected-agents.txt"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -74,20 +66,48 @@ def live_topology(live_bridge):
 
 
 @pytest.fixture(scope="session")
+def expected_agents():
+    """Agent names the running topology wired, written by stack/bootstrap.sh.
+
+    Absent when pointed at someone else's deployment, which is a supported way
+    to run this — the tests that need it say so by skipping.
+    """
+    try:
+        with open(EXPECTED_AGENTS_FILE) as handle:
+            return {line.strip() for line in handle if line.strip()}
+    except OSError:
+        pytest.skip(f"{EXPECTED_AGENTS_FILE} not present — not a ./stack.sh network")
+
+
+@pytest.fixture(scope="session")
+def instance(live_topology):
+    """The path of an agent that actually executes.
+
+    Routers forward; only an instance agent and its leaves run project and user
+    work, so this is what the write tests address. A topology with two clusters
+    has two — either will do, and taking the first keeps the run deterministic.
+    """
+    instances = sorted(node["id"] for node in live_topology["nodes"] if node["type"] == "instance")
+    if not instances:
+        pytest.skip("no instance agent in this network, so nothing executes")
+    return instances[0]
+
+
+@pytest.fixture(scope="session")
 def writable():
     if opdata.READONLY:
         pytest.skip("SIGNALBOX_READONLY is set; skipping the tests that submit jobs")
 
 
 @pytest.fixture(scope="session")
-def project(writable):
+def project(writable, instance):
     """One project on the cluster, shared by the tests below.
 
     Named uniquely because op-localaccount creates a real Unix group for it,
     and a second run against the same stack would collide.
     """
     name = f"sbx{uuid.uuid4().hex[:8]}.waldur"
-    result = opdata.run_command(f"{INSTANCE} add_project {name}", 90_000)
+    result = opdata.run_command(f"{instance} add_project {name}", 90_000)
     assert result["ok"], result
     return name
 
@@ -137,10 +157,10 @@ def test_the_health_tree_arrives_already_deduplicated(live_bridge):
 # --- topology ------------------------------------------------------------
 
 
-def test_every_agent_in_the_stack_is_reported(live_topology):
+def test_every_agent_in_the_stack_is_reported(live_topology, expected_agents):
     assert live_topology["ok"] is True
     names = {node["name"] for node in live_topology["nodes"]}
-    assert names == set(EXPECTED_PATHS), names
+    assert names == expected_agents, names
 
 
 def test_the_walk_terminates_and_visits_each_agent_once(live_topology):
@@ -148,14 +168,24 @@ def test_the_walk_terminates_and_visits_each_agent_once(live_topology):
     assert len(names) == len(set(names)), names
 
 
-def test_paths_are_the_destinations_the_agents_answer_on(live_topology):
-    """The dotted path opdata.walk builds is a real route, not a label.
+def test_each_path_extends_its_parents(live_topology):
+    """A path is built by walking, so every one is a parent's path plus a name.
 
-    Proved by addressing every agent by its derived path in the next test —
-    here just that the shape is what the stack wires.
+    Asserted structurally rather than against a fixed list, because the shape
+    depends on the topology this is pointed at. The next test proves the paths
+    are routes and not just labels.
     """
-    paths = {node["name"]: node["id"] for node in live_topology["nodes"]}
-    assert paths == EXPECTED_PATHS
+    by_id = {node["id"]: node for node in live_topology["nodes"]}
+    for node in live_topology["nodes"]:
+        if node["depth"] <= 1:
+            # The bridge, and whatever it peers directly, are addressed by bare
+            # name — a first hop has no prefix to extend.
+            assert node["id"] == node["name"], node
+            continue
+        parent_id, _, last = node["id"].rpartition(".")
+        assert last == node["name"], node
+        assert parent_id in by_id, f"{node['id']} has no parent node"
+        assert by_id[parent_id]["depth"] == node["depth"] - 1, node
 
 
 def test_every_derived_path_is_routable(live_topology):
@@ -214,9 +244,9 @@ def test_asking_for_diagnostics_logs_itself(live_bridge):
     assert any(opdata.SELF_CHATTER in message for message in messages), messages[-10:]
 
 
-def test_the_chatter_is_confined_to_the_bridge(live_bridge):
+def test_the_chatter_is_confined_to_the_bridge(live_bridge, instance):
     """Polling an agent does not put a line in that agent's own log."""
-    detail = opdata.agent_detail(INSTANCE, log_lines=200, include_self=True)
+    detail = opdata.agent_detail(instance, log_lines=200, include_self=True)
     assert all(opdata.SELF_CHATTER not in row["message"] for row in detail["logs"])
 
 
@@ -244,36 +274,41 @@ def test_merged_logs_interleave_the_whole_network(live_topology):
     assert rows == sorted(rows, key=lambda row: row["sort"])
 
 
-def test_the_level_filter_is_applied_by_the_agent(live_bridge):
-    rows = opdata.agent_detail(INSTANCE, log_lines=100, level="WARN+")["logs"]
+def test_the_level_filter_is_applied_by_the_agent(live_bridge, instance):
+    rows = opdata.agent_detail(instance, log_lines=100, level="WARN+")["logs"]
     assert all(row["level"] in ("WARN", "ERROR") for row in rows), rows
 
 
 # --- the write path ------------------------------------------------------
 
 
-def test_the_instance_agent_executes(project):
+def test_the_instance_agent_executes(project, instance):
     """add_project reaches a leaf and comes back with a real mapping."""
-    result = opdata.run_command(f"{INSTANCE} get_project_mapping {project}", 90_000)
+    result = opdata.run_command(f"{instance} get_project_mapping {project}", 90_000)
     assert result["ok"], result
     assert project.split(".")[0] in result["result"], result
 
 
-def test_adding_a_user_maps_it_locally(project):
-    result = opdata.run_command(f"{INSTANCE} add_user sbxuser.{project}", 90_000)
+def test_adding_a_user_maps_it_locally(project, instance):
+    result = opdata.run_command(f"{instance} add_user sbxuser.{project}", 90_000)
     assert result["ok"], result
     # user:local-user:local-group
     assert result["result"].count(":") >= 2, result
 
 
-@pytest.mark.parametrize("router", ["waldur.provider", "waldur.provider.clusters"])
-def test_routers_do_not_execute(writable, router):
+@pytest.mark.parametrize("role", ["provider", "platform"])
+def test_routers_do_not_execute(writable, live_topology, role):
     """Provider and platform agents forward; they do not run project work.
 
     The presets encode this by targeting a role rather than an agent, and this
-    is the behaviour they encode.
+    is the behaviour they encode. Found by role rather than by name, so it
+    holds for whatever network this is pointed at.
     """
-    result = opdata.run_command(f"{router} add_project sbxrouter.waldur", 30_000)
+    routers = [n["id"] for n in live_topology["nodes"] if n["type"] == role]
+    if not routers:
+        pytest.skip(f"no {role} agent in this network")
+
+    result = opdata.run_command(f"{routers[0]} add_project sbxrouter.waldur", 30_000)
     assert result["ok"] is False, result
 
 
@@ -292,9 +327,9 @@ def test_an_unroutable_destination_is_not_a_success(writable):
     assert result["error"], result
 
 
-def test_an_unknown_project_comes_back_as_an_error(writable):
+def test_an_unknown_project_comes_back_as_an_error(writable, instance):
     """A refusal arrives as the agent's own message, which is the useful part."""
-    result = opdata.run_command(f"{INSTANCE} get_project_mapping neverexisted.waldur", 30_000)
+    result = opdata.run_command(f"{instance} get_project_mapping neverexisted.waldur", 30_000)
     assert result["ok"] is False, result
     assert result["error"], result
 

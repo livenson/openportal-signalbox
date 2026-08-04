@@ -12,9 +12,10 @@ install and the agents the stack builds have to be one release, and a mismatch
 is an authentication failure rather than a version warning, so the pin is
 checked rather than trusted.
 
-The chain the bootstrap wires is also re-derived here and pushed through
-opdata.walk(), because the destinations the front ends address agents by are
-that chain's shape — see test_walking_the_wired_chain_gives_routable_paths.
+Every topology in stack/topologies/ is re-derived here from its own AGENTS and
+WIRES and pushed through opdata.walk(), because the destinations the front ends
+address agents by *are* that shape. That also pins one picture signalbox gets
+wrong — see test_the_other_allocator_is_rendered_below_this_ones_provider.
 """
 
 import re
@@ -106,15 +107,6 @@ def test_the_downloaded_binaries_are_checked_against_the_pin():
     assert 'grep -qw "${OPENPORTAL_VERSION}"' in dockerfile
 
 
-def test_every_wired_agent_is_downloaded():
-    """The image must carry a binary for each agent the bootstrap starts."""
-    fetched = set(
-        re.findall(r"\bop-[a-z]+\b", (STACK / "Dockerfile").read_text().split("for agent in")[1])
-    )
-    for directory in re.findall(r'^    "([a-z]+):[a-z]+:\d+"$', BOOTSTRAP, re.MULTILINE):
-        assert f"op-{directory}" in fetched, f"op-{directory} is wired but never downloaded"
-
-
 def test_both_runner_architectures_are_covered():
     """arm64 on a dev machine, amd64 on a hosted runner.
 
@@ -170,86 +162,148 @@ def test_the_invite_volume_is_mounted_into_the_bridge():
     assert "openportal-invite:/openportal-invite" in bridge + anchor
 
 
-def test_the_bridge_writes_the_invite_the_launchers_mount():
+def test_the_discoverable_bridge_writes_the_invite_the_launchers_mount():
     """The filename has to be the one opdata expects under the mount point.
 
-    run.sh mounts the invite volume at /inv, and opdata defaults to
-    /inv/bridge-invite.toml; the bootstrap picks the basename.
+    run.sh mounts the invite volume at /inv and opdata defaults to
+    /inv/bridge-invite.toml, so the bridge that `detect.sh` finds — the compose
+    service literally named `op-bridge`, config directory `bridge` — has to be
+    the one whose invite gets that name. A topology with a second allocator
+    writes a second invite beside it, which is opt-in via
+    OPENPORTAL_BRIDGE_INVITE rather than something discovery could pick.
     """
-    written = re.search(r'bridge --config "\$\{INVITE_DIR\}/([^"]+)"', BOOTSTRAP).group(1)
-    assert opdata.INVITE.endswith(f"/{written}")
+    template = re.search(r'bridge --config "\$\{INVITE_DIR\}/([^"]+)"', BOOTSTRAP).group(1)
+    assert opdata.INVITE.endswith("/" + template.replace("${dir}", "bridge"))
 
 
-def test_every_agent_is_reachable_at_the_url_it_advertises():
+# --- the topologies ------------------------------------------------------
+#
+# Each stack/topologies/*.sh declares AGENTS (dir:name:port:binary) and WIRES
+# (listener:dialer). Everything below is generic over those two arrays, so a
+# new topology is covered the moment the file exists.
+
+TOPOLOGIES = sorted(p.stem for p in (STACK / "topologies").glob("*.sh"))
+
+
+def topology(name):
+    """A topology file's AGENTS and WIRES, parsed."""
+    text = (STACK / "topologies" / f"{name}.sh").read_text()
+
+    def array(key):
+        body = text.split(f"{key}=(", 1)[1].split("\n)", 1)[0]
+        return re.findall(r'^\s*"([^"]+)"', body, re.MULTILINE)
+
+    agents = {}
+    for entry in array("AGENTS"):
+        directory, agent, port, binary = entry.split(":")
+        agents[directory] = {"name": agent, "port": port, "binary": binary}
+    wires = [tuple(w.split(":")) for w in array("WIRES")]
+    return agents, wires
+
+
+def test_there_is_more_than_one_topology():
+    """Guards the parametrisation itself: a glob that matches nothing passes."""
+    assert "chain" in TOPOLOGIES
+    assert len(TOPOLOGIES) > 1
+
+
+@pytest.mark.parametrize("name", TOPOLOGIES)
+def test_every_agent_is_reachable_at_the_url_it_advertises(name):
     """Each agent's peers dial it on ws://op-<dir>:<port>.
 
-    So every agent needs either its own compose service or a network alias on
-    the service it shares; an agent wired but not addressable connects to
-    nothing and shows up as a missing leaf.
+    So every agent needs its own compose service or a network alias on the
+    service it shares; an agent wired but not addressable connects to nothing
+    and shows up as a missing leaf.
     """
-    addressable = set(re.findall(r"^  (op-[a-z]+):$", COMPOSE, re.MULTILINE))
-    addressable |= set(re.findall(r"^          - (op-[a-z]+)$", COMPOSE, re.MULTILINE))
+    addressable = set(re.findall(r"^  (op-[a-z0-9]+):$", COMPOSE, re.MULTILINE))
+    addressable |= set(re.findall(r"^          - (op-[a-z0-9]+)$", COMPOSE, re.MULTILINE))
 
-    for directory in re.findall(r'^    "([a-z]+):[a-z]+:\d+"$', BOOTSTRAP, re.MULTILINE):
+    agents, _ = topology(name)
+    for directory in agents:
         assert f"op-{directory}" in addressable, f"op-{directory} is wired but unreachable"
 
 
-def test_agent_ports_are_unique():
-    """The three leaves share a container, so a clash is a real collision."""
-    ports = re.findall(r'^    "[a-z]+:[a-z]+:(\d+)"$', BOOTSTRAP, re.MULTILINE)
+@pytest.mark.parametrize("name", TOPOLOGIES)
+def test_agent_ports_and_names_are_unique(name):
+    """Leaves share a container, so a port clash is a real collision.
+
+    Names have to be unique for a different reason: the viewer maps edges onto
+    nodes by agent name (index.html), and a destination is a dotted list of
+    them, so two agents answering to one name is ambiguous on the wire as well
+    as on screen.
+    """
+    agents, _ = topology(name)
+    ports = [a["port"] for a in agents.values()]
+    names = [a["name"] for a in agents.values()]
     assert len(ports) == len(set(ports)), ports
+    assert len(names) == len(set(names)), names
 
 
-# --- the shape of the chain ----------------------------------------------
+@pytest.mark.parametrize("name", TOPOLOGIES)
+def test_every_wired_agent_has_a_binary_the_image_carries(name):
+    """A topology may run the same agent twice, so dir and binary differ.
 
-
-def wired_chain():
-    """The peer graph the bootstrap builds, as {agent: {peer: agent}}.
-
-    Read from the `wire <listener> <dialer>` calls and the agent table above
-    them. Links are added in both directions because that is how the agents
-    report them — which is the whole reason opdata.walk needs a seen set.
+    op-filesystem2 is a config directory, not a program; the image only ever
+    downloads the eight real ones.
     """
-    names = dict(re.findall(r'^    "([a-z]+):([a-z]+):\d+"$', BOOTSTRAP, re.MULTILINE))
-    agents = {directory: FakeHealthInfo(name, "agent") for directory, name in names.items()}
-
-    body = BOOTSTRAP.split("# Only reachability depends on the direction")[-1]
-    pairs = re.findall(r"^wire ([a-z]+) ([a-z]+)$", body, re.MULTILINE)
-    assert pairs, "no wire calls found — has bootstrap.sh been restructured?"
-
-    for listener, dialer in pairs:
-        agents[listener]._peers[names[dialer]] = agents[dialer]
-        agents[dialer]._peers[names[listener]] = agents[listener]
-    return agents
+    fetched = set(
+        re.findall(r"\bop-[a-z]+\b", (STACK / "Dockerfile").read_text().split("for agent in")[1])
+    )
+    agents, _ = topology(name)
+    for directory, agent in agents.items():
+        assert agent["binary"] in fetched, f"{directory} wants {agent['binary']}, not downloaded"
 
 
-def test_the_chain_is_wired_as_one_connected_tree():
-    """Every agent reachable from the bridge, and no agent wired twice.
+@pytest.mark.parametrize("name", TOPOLOGIES)
+def test_wires_only_reference_declared_agents(name):
+    agents, wires = topology(name)
+    for listener, dialer in wires:
+        assert listener in agents, f"{name}: wire to undeclared '{listener}'"
+        assert dialer in agents, f"{name}: wire from undeclared '{dialer}'"
 
-    An extra `wire` is not an error the agents report — it is a second route
-    that changes which destination an agent answers on, silently.
+
+def peer_graph(name):
+    """The peer graph a topology builds, as FakeHealthInfo objects.
+
+    Links are added in both directions because that is how the agents hold
+    them — each side keeps a key for the other. What the *health API* returns
+    is narrower; see test_live.py.
     """
-    agents = wired_chain()
-    nodes, edges = [], []
-    opdata.walk(agents["bridge"], "", 0, nodes, edges, set())
+    agents, wires = topology(name)
+    nodes = {d: FakeHealthInfo(a["name"], "agent") for d, a in agents.items()}
+    for listener, dialer in wires:
+        nodes[listener]._peers[agents[dialer]["name"]] = nodes[dialer]
+        nodes[dialer]._peers[agents[listener]["name"]] = nodes[listener]
+    return agents, nodes
 
-    assert len(nodes) == len(agents), "an agent is not reachable from the bridge"
-    assert len(edges) == len(agents) - 1, "the chain has a shortcut or a second route"
 
+@pytest.mark.parametrize("name", TOPOLOGIES)
+def test_the_topology_is_one_connected_acyclic_graph(name):
+    """Every agent reachable from a bridge, and no agent wired twice.
 
-def test_walking_the_wired_chain_gives_routable_paths():
-    """The stack produces exactly the destinations the front ends address.
-
-    opdata.walk turns the peer tree into dotted paths, and those paths *are*
-    the destinations diagnostics() and the console use. This pins the two
-    together: rewiring the stack without updating what signalbox expects to
-    address shows up here rather than as a job that never lands.
+    OpenPortal requires this: portal route discovery derives each agent's route
+    from its peers and treats a second route to the same portal as an impostor,
+    "because the topology is single-pathed and acyclic". A stray extra wire is
+    not a nicety — it is a denial of service at the far end.
     """
-    nodes, edges = [], []
-    opdata.walk(wired_chain()["bridge"], "", 0, nodes, edges, set())
-    paths = {node["name"]: node["id"] for node in nodes}
+    agents, nodes = peer_graph(name)
+    bridges = [d for d, a in agents.items() if a["binary"] == "op-bridge"]
+    assert bridges, f"{name} has no bridge, so signalbox cannot see it at all"
 
-    assert paths == {
+    walked, edges = [], []
+    opdata.walk(nodes[bridges[0]], "", 0, walked, edges, set())
+
+    assert len(walked) == len(agents), f"{name}: an agent is unreachable from {bridges[0]}"
+    assert len(edges) == len(agents) - 1, f"{name}: a shortcut or a second route"
+
+
+def test_the_chain_gives_the_destinations_the_front_ends_address():
+    """The default topology produces exactly the routes signalbox expects."""
+    _, nodes = peer_graph("chain")
+    walked, edges = [], []
+    opdata.walk(nodes["bridge"], "", 0, walked, edges, set())
+
+    assert {n["name"]: n["id"] for n in walked} == {
         "bridge": "bridge",
         "waldur": "waldur",
         "provider": "waldur.provider",
@@ -261,26 +315,75 @@ def test_walking_the_wired_chain_gives_routable_paths():
     }
 
 
-def test_the_instance_agent_has_all_three_leaves():
+def test_both_clusters_are_addressable_from_either_allocator():
+    """The point of multi-allocator: work crosses into both clusters.
+
+    Each allocator's own portal name roots the route, and the shared provider
+    is what makes the other allocator's clusters reachable at all.
+    """
+    _, nodes = peer_graph("multi-allocator")
+    for bridge, portal in (("bridge", "waldur"), ("bridge2", "hpcportal")):
+        walked, edges = [], []
+        opdata.walk(nodes[bridge], "", 0, walked, edges, set())
+        paths = {n["name"]: n["id"] for n in walked}
+        for cluster in ("cluster1", "cluster2"):
+            assert paths[cluster] == f"{portal}.provider.clusters.{cluster}", paths[cluster]
+
+
+def test_the_other_allocator_is_rendered_below_this_ones_provider():
+    """A known wrong picture, pinned so it cannot change unnoticed.
+
+    Nothing in the health report says "this peer is another allocator", so the
+    walk reaches hpcportal through waldur's provider and gives it the path
+    `waldur.provider.hpcportal` — which reads as a downstream agent of waldur's
+    and is not a route an instruction can use. Verified against a live stack:
+    `diagnostics()` on that path *works* (the inspector opens, so the node
+    looks legitimate) while an instruction sent to it never lands.
+
+    If opdata ever learns to mark or cut peer portals, this is the test that
+    should change.
+    """
+    _, nodes = peer_graph("multi-allocator")
+    walked, edges = [], []
+    opdata.walk(nodes["bridge"], "", 0, walked, edges, set())
+    paths = {n["name"]: n["id"] for n in walked}
+
+    assert paths["hpcportal"] == "waldur.provider.hpcportal"
+    assert paths["bridge2"] == "waldur.provider.hpcportal.bridge2"
+
+
+@pytest.mark.parametrize("name", TOPOLOGIES)
+def test_every_instance_has_all_three_leaf_roles(name):
     """op-cluster refuses project and user work without all three.
 
-    Which is why the node exists at all: drop one and every add_project fails
-    with a message about the missing dependency rather than about the job.
+    Which is why they are the minimum per cluster rather than a nicety: drop
+    one and every add_project fails on the missing dependency, not on the job.
     """
-    cluster_peers = set(wired_chain()["cluster"]._peers)
-    assert {"filesystem", "slurm", "localaccount"} <= cluster_peers
+    agents, nodes = peer_graph(name)
+    instances = [d for d, a in agents.items() if a["binary"] == "op-cluster"]
+    assert instances, f"{name} has no instance agent, so nothing executes"
+
+    for instance in instances:
+        roles = {agents[d]["binary"] for d in agents if agents[d]["name"] in nodes[instance]._peers}
+        assert {"op-filesystem", "op-slurm", "op-localaccount"} <= roles, (
+            f"{name}: {instance} is missing a leaf role, so it cannot run jobs"
+        )
 
 
-def test_the_leaves_share_one_container():
-    """Split apart, add_project fails on a group the filesystem agent cannot see.
+def test_the_leaves_share_a_container_per_cluster():
+    """Split apart, add_project fails on a group the filesystem cannot see.
 
     op-localaccount creates the Unix group and op-filesystem chowns to it, so
-    they need one /etc/group. The aliases are what keep them individually
-    addressable despite that.
+    they need one /etc/group — and a second cluster needs a second container,
+    not more aliases on the first, because the two are separate machines.
     """
-    node = COMPOSE.split("\n  op-node:")[1].split("\n  op-bridge:")[0]
-    for agent in ("op-filesystem", "op-slurm", "op-localaccount"):
-        assert agent in node, f"{agent} is not part of op-node"
+    for service, agents in (
+        ("op-node", ("op-filesystem", "op-slurm", "op-localaccount")),
+        ("op-node2", ("op-filesystem2", "op-slurm2", "op-localaccount2")),
+    ):
+        block = COMPOSE.split(f"\n  {service}:")[1].split("\n  op-", 1)[0]
+        for agent in agents:
+            assert agent in block, f"{agent} is not part of {service}"
 
 
 # --- things 0.91.0 changed -----------------------------------------------
@@ -296,17 +399,30 @@ def test_the_bootstrap_does_not_widen_permissions_on_key_material():
     assert "chmod" not in BOOTSTRAP_CODE
 
 
-def test_peers_are_left_untyped():
-    """`client --add --type portal` switches on portal route discovery.
+def test_peers_are_left_untyped_and_unzoned():
+    """`--type portal` switches on portal route discovery; `--zone` separates.
 
-    Agents then derive the route to each portal and refuse traffic that does
-    not match it. signalbox exists to show broken routing, so the stack keeps
-    the pre-0.91.0 behaviour of not declaring peer types.
+    Both are what an operator deploying this would want, and both are wrong
+    here: signalbox exists to show broken routing, and zones would stop the two
+    allocators' traffic meeting on the shared hops at all — which is the thing
+    the multi-allocator topology is for looking at.
     """
     assert "--type" not in BOOTSTRAP_CODE
+    assert "--zone" not in BOOTSTRAP_CODE
 
 
 @pytest.mark.parametrize("script", ["bootstrap.sh", "node.sh"])
 def test_stack_scripts_fail_loudly(script):
     """A half-bootstrapped chain is worse than one that did not start."""
     assert "set -euo pipefail" in (STACK / script).read_text()
+
+
+@pytest.mark.parametrize("name", TOPOLOGIES)
+def test_every_topology_keeps_a_discoverable_bridge(name):
+    """`detect.sh` matches the service name exactly, so one must be `op-bridge`.
+
+    A topology whose bridges were all called something else would come up
+    healthy and be invisible to run.sh and tui.sh.
+    """
+    agents, _ = topology(name)
+    assert "bridge" in agents and agents["bridge"]["binary"] == "op-bridge"

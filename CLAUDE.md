@@ -15,7 +15,7 @@ tree, `diagnostics(destination)` for one agent's jobs, warnings and log.
 ## Commands
 
 ```bash
-python -m pytest                                   # 56 tests, ~5s
+python -m pytest                                   # 68 tests, ~5s
 python -m pytest tests/test_opdata.py::test_attr_calls_a_method
 python -m pytest -k read_only                      # note the underscores
 ruff check . && ruff format --check .
@@ -88,7 +88,15 @@ published per release for x86_64 and aarch64 — dropped into one image. Do not
 a distroless image cannot run. Do not go back to compiling from source either;
 that is where this started and it cost ten minutes a run for nothing.
 
-Read `stack/bootstrap.sh` before changing the chain: it wires the peers, and
+The shape comes from `stack/topologies/*.sh`, which declare `AGENTS`
+(`dir:name:port:binary`) and `WIRES` (`listener:dialer`); `bootstrap.sh` is
+generic over both, and `tests/test_stack.py` parametrises over every file in
+that directory, so a new topology is covered the moment it exists. `dir` is
+also the DNS name peers dial (`op-<dir>`), so it must match a compose service
+or one of its aliases; `binary` is separate because a topology may run the same
+agent twice (two clusters, two `op-filesystem`).
+
+Read `stack/bootstrap.sh` before changing a topology: it wires the peers, and
 `tests/test_stack.py` re-derives the tree from its `wire` calls and pushes it
 through `opdata.walk()`, so the destinations the front ends address are pinned
 to what the stack actually builds.
@@ -153,6 +161,17 @@ both are views a tool refreshing every few seconds tends to be sitting on.
 `opdata.SELF_CHATTER` filters those by default (`n` in the TUI re-enables). The
 filter over-fetches then trims, so dropped chatter does not eat the caller's
 limit.
+
+**Nothing marks a peer as another allocator.** On an estate where two portals
+share a provider, walking out from one bridge reaches the other portal *through*
+that provider and gives it a path like `waldur.provider.hpcportal` — which reads
+as a downstream agent and is not a route. `diagnostics()` on it works, so the
+node opens in the inspector and looks fine; an instruction sent to it never
+lands. Reproduce with `./stack.sh up multi-allocator`; pinned by
+`test_the_other_allocator_is_rendered_below_this_ones_provider`. Fixing it means
+cutting or marking a peer whose `agent_type` is `portal` and which is not the
+root's own portal — do not simply drop portals, or the estate loses its second
+half entirely.
 
 **Routers never increment completed counters**, so the graph's edge animation
 derives throughput from each agent's completed delta and pushes it *up its own

@@ -64,4 +64,5 @@ COPY bootstrap.sh /usr/local/bin/op-bootstrap
 COPY node.sh /usr/local/bin/op-node
 COPY probe.py /usr/local/bin/op-probe
 COPY filesystem-volumes.toml /opt/openportal/filesystem-volumes.toml
+COPY topologies/ /opt/openportal/topologies/
 RUN chmod +x /usr/local/bin/op-bootstrap /usr/local/bin/op-node /usr/local/bin/op-probe

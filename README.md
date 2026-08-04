@@ -119,16 +119,37 @@ real deployment, with no portal software behind it — and `run.sh` and `tui.sh`
 find it exactly as they find anything else.
 
 ```bash
-./stack.sh up        # under a minute, cold
-./tui.sh             # or ./run.sh
-./stack.sh status    # what the bridge sees
-./stack.sh down      # and its volumes
+./stack.sh up                    # under a minute, cold
+./tui.sh                         # or ./run.sh
+./stack.sh status                # what the bridge sees
+./stack.sh topologies            # what shapes are available
+./stack.sh up multi-allocator    # a harder one
+./stack.sh down                  # and its volumes
 ```
 
+**`chain`** (default) — one allocator, one cluster. The shape the front ends
+were designed against:
+
 ```
-op-bridge → op-portal("waldur") → op-provider → op-clusters (platform)
-  → op-cluster (instance) → op-filesystem + op-slurm + op-localaccount
+op-bridge → waldur (portal) → provider → clusters (platform)
+  → cluster (instance) → filesystem + slurm + localaccount
 ```
+
+**`multi-allocator`** — two allocators, each with its own portal and bridge,
+both allocating onto two shared clusters through one provider. Their traffic
+crosses on every shared hop, and `waldur.provider.clusters.cluster2` and
+`hpcportal.provider.clusters.cluster1` are both live routes:
+
+```
+op-bridge  → waldur    (portal) ─┐
+                                  ├→ provider → clusters ─┬→ cluster1 → fs1/slurm1/acct1
+op-bridge2 → hpcportal (portal) ─┘                        └→ cluster2 → fs2/slurm2/acct2
+```
+
+The allocators do not talk to each other, and cannot: a Portal holds a key pair
+to its Provider and to nothing else, and zones exist so "portal A cannot receive
+messages intended for portal B". Point signalbox at the second allocator with
+`OPENPORTAL_BRIDGE_INVITE=/inv/bridge2-invite.toml ./run.sh`.
 
 All eight agents come from upstream's release binaries — statically linked,
 ~8 MB each — dropped into one image. Upstream also publishes per-agent OCI
@@ -165,6 +186,34 @@ it also shows up on its own after the VM's clock jumps. Retrying works; a
 container restart fixes it for good. Worth knowing because a 401 otherwise
 reads as a bad key.
 
+## What signalbox gets wrong on a shared estate
+
+The multi-allocator topology exists because it is the shape signalbox draws
+**incorrectly**, and it is better to be able to reproduce that than to describe
+it. Two allocators sharing a provider is a real deployment; a national service
+sold through more than one allocation route is exactly this picture.
+
+Nothing in a health report says "this peer is another allocator". So walking out
+from one bridge reaches the other allocator *through the shared provider*, and
+gives it a path that reads as a downstream agent:
+
+```
+waldur.provider.hpcportal            ← the other allocator's portal
+waldur.provider.hpcportal.bridge2    ← and its bridge
+```
+
+Neither is a route an instruction can use. The trap is that they are not
+obviously wrong: `diagnostics()` on those paths **works**, so the node opens in
+the inspector and looks legitimate, while an instruction aimed at it never
+lands — it just sits non-terminal until the wait expires. The hierarchy is also
+inverted: the second allocator is drawn below the first one's provider, as if
+subordinate to it.
+
+Multi-cluster is fine. Two clusters under one platform render correctly, both
+are addressable from either allocator, and the portal name namespaces the local
+group, so `xsend.waldur` and `xsend.hpcportal` do not collide on a shared
+cluster.
+
 ## Limitations
 
 - **Logs are recent-only.** Each agent keeps an in-memory ring buffer that dies
@@ -184,7 +233,7 @@ reads as a bad key.
 ## Development
 
 ```bash
-pip install pytest && python -m pytest      # 56 tests, ~5s, no network
+pip install pytest && python -m pytest      # 68 tests, ~5s, no network
 ruff check . && ruff format --check .
 
 ./stack.sh up && ./live.sh                  # 22 more, against real agents

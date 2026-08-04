@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs the three leaf agents that together stand in for a cluster login node:
+# Runs the leaf agents that together stand in for a cluster login node:
 # op-localaccount (Unix users and groups), op-filesystem (home and project
 # directories) and op-slurm (accounting).
 #
@@ -11,11 +11,15 @@
 #
 # Each agent keeps its own identity, config and port; the compose service
 # carries a network alias per agent so peers still dial them by name. In
-# signalbox they appear as three separate leaves, which is what they are.
+# signalbox they appear as separate leaves, which is what they are.
+#
+# NODE_AGENTS lists the config directories to run, so a topology with two
+# clusters runs this twice with a different set each time.
 set -euo pipefail
 
 CONFIG_ROOT="${CONFIG_ROOT:-/op-config}"
 SLURMRESTD_PORT="${SLURMRESTD_PORT:-6820}"
+NODE_AGENTS="${NODE_AGENTS:-localaccount filesystem slurm}"
 
 # op-slurm talks to slurmrestd rather than shelling out to sacctmgr, and exits
 # on startup if the REST server is unreachable, so it comes up first.
@@ -36,15 +40,19 @@ for _ in $(seq 1 60); do
     sleep 1
 done
 
+# The config directory carries a trailing digit when a topology runs more than
+# one cluster (localaccount2, filesystem2, ...); the binary never does.
+binary_for() { echo "op-${1%%[0-9]*}"; }
+
 pids=("$restd_pid")
-for agent in localaccount filesystem slurm; do
-    echo "==> Starting op-${agent}"
-    "op-${agent}" -c "${CONFIG_ROOT}/${agent}/config.toml" run &
+for agent in $NODE_AGENTS; do
+    echo "==> Starting $(binary_for "$agent") from ${agent}/"
+    "$(binary_for "$agent")" -c "${CONFIG_ROOT}/${agent}/config.toml" run &
     pids+=("$!")
 done
 
 # If any one agent dies the node is broken, so take the container down with it
-# rather than leaving a half-working cluster that signalbox would show as three
+# rather than leaving a half-working cluster that signalbox would show as
 # healthy leaves.
 wait -n "${pids[@]}"
 echo "A node agent exited; stopping the node." >&2
