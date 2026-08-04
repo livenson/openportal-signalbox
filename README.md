@@ -71,6 +71,9 @@ plain ES modules. One HTML file, no npm.
   peer connection: both ends' engine versions, what it carried, and the
   connection log reconstructed from *both* endpoints — handshakes, watchdog
   timeouts, reconnects — which otherwise lives in two containers.
+
+![link inspector showing both ends of a peer connection](docs/edge.png)
+
 - **Filter messages** by level and substring. The filter is applied by the
   agent itself, so narrowing asks for less rather than hiding rows locally.
 - **Run instructions** from the console, aimed at whichever agent is selected.
@@ -201,6 +204,12 @@ gives it a path that reads as a downstream agent:
 waldur.provider.hpcportal            ← the other allocator's portal
 waldur.provider.hpcportal.bridge2    ← and its bridge
 ```
+
+![two allocators sharing a provider, the second drawn as a subordinate branch](docs/multi-allocator.png)
+
+Above: `./stack.sh up multi-allocator`. Work flows through both clusters, and
+`hpcportal` with its `bridge2` hangs off `provider` on a dead link at the
+bottom — the second allocator drawn as if it reported to the first.
 
 Neither is a route an instruction can use. The trap is that they are not
 obviously wrong: `diagnostics()` on those paths **works**, so the node opens in
