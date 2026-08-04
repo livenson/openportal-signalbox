@@ -15,7 +15,6 @@ set -euo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/detect.sh"
 resolve_target
 PORT="${PORT:-8900}"
-OPENPORTAL_VERSION="${OPENPORTAL_VERSION:-0.90.0}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 echo "signalbox on http://localhost:${PORT} (ctrl-c to stop)"

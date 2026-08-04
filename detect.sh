@@ -9,14 +9,25 @@
 #
 # Override either by exporting NETWORK / INVITE_VOLUME.
 
-detect_bridge_container() {
+# The client version comes from openportal.env, which the test stack pulls its
+# agents from too — a client and a bridge on different releases fail to
+# authenticate rather than reporting a mismatch, so they are pinned together in
+# one file. Exported so `docker compose` substitution picks it up.
+# shellcheck source=openportal.env
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/openportal.env"
+export OPENPORTAL_VERSION
+
+detect_bridge_containers() {
     docker ps --filter "label=com.docker.compose.service=op-bridge" \
-              --format '{{.Names}}' | head -1
+              --format '{{.Names}}'
+}
+
+detect_bridge_container() {
+    detect_bridge_containers | head -1
 }
 
 detect_network() {
-    local container
-    container=$(detect_bridge_container)
+    local container=$1
     [ -n "$container" ] || return 1
     docker inspect "$container" \
         --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' \
@@ -24,14 +35,32 @@ detect_network() {
 }
 
 detect_invite_volume() {
-    # The bootstrap writes the invite into a volume the agents share; match on
-    # the conventional suffix rather than a fixed project prefix.
+    # Prefer the volume mounted into the bridge we already picked, so the key
+    # and the network always come from the same stack. Resolving them
+    # independently is fine until a second stack is running — ./stack.sh makes
+    # that normal — and then it can pair one stack's network with another's
+    # invite, which fails as a signature error and reads as a corrupt invite.
+    local container=$1
+    if [ -n "$container" ]; then
+        docker inspect "$container" --format '{{range .Mounts}}{{.Name}}{{"\n"}}{{end}}' \
+            2>/dev/null | grep -E 'openportal-invite$' | head -1 && return 0
+    fi
+    # Deployments that do not mount the invite into the bridge itself still
+    # work: fall back to the conventional suffix, project prefix unknown.
     docker volume ls --format '{{.Name}}' | grep -E 'openportal-invite$' | head -1
 }
 
 resolve_target() {
-    NETWORK="${NETWORK:-$(detect_network || true)}"
-    INVITE_VOLUME="${INVITE_VOLUME:-$(detect_invite_volume || true)}"
+    local container
+    container=$(detect_bridge_container)
+
+    if [ "$(detect_bridge_containers | wc -l | tr -d ' ')" -gt 1 ]; then
+        echo "More than one OpenPortal stack is running; using '${container}'." >&2
+        echo "Set NETWORK and INVITE_VOLUME to pick a different one." >&2
+    fi
+
+    NETWORK="${NETWORK:-$(detect_network "$container" || true)}"
+    INVITE_VOLUME="${INVITE_VOLUME:-$(detect_invite_volume "$container" || true)}"
 
     if [ -z "${NETWORK:-}" ]; then
         cat >&2 <<'EOF'

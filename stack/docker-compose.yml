@@ -1,0 +1,119 @@
+# A throwaway OpenPortal agent network for signalbox to point at.
+#
+# signalbox reads a live network and has no way to fake one, so until now both
+# front ends and every live behaviour needed someone else's deployment. This is
+# that network, reduced to the agents alone — no portal software, no Waldur,
+# nothing signalbox does not read.
+#
+#   op-bridge -> op-portal("waldur") -> op-provider -> op-clusters (platform)
+#     -> op-cluster (instance) -> op-filesystem + op-slurm + op-localaccount
+#
+# op-cluster refuses every project and user job unless a filesystem, a
+# scheduler and an account agent are all connected, which is why three leaves
+# are the minimum rather than a nicety.
+#
+# Bring it up with ../stack.sh, which passes the pinned version through from
+# openportal.env. The service and volume names below are load-bearing:
+# detect.sh finds a stack by the `op-bridge` compose service label and by a
+# volume whose name ends in `openportal-invite`, so run.sh and tui.sh discover
+# this exactly as they discover a real deployment. tests/test_stack.py pins
+# both, since renaming either breaks discovery silently.
+name: signalbox-stack
+
+x-agent: &agent
+  build:
+    context: .
+    args:
+      OPENPORTAL_VERSION: "${OPENPORTAL_VERSION:?set by openportal.env via stack.sh}"
+  environment:
+    RUST_LOG: "${OPENPORTAL_LOG_LEVEL:-info}"
+  volumes:
+    - openportal-config:/op-config
+    - openportal-invite:/openportal-invite
+  restart: unless-stopped
+
+# Every agent waits for the one-shot bootstrap to finish writing its config.
+# Kept out of the anchor above because op-bootstrap shares that anchor and
+# cannot depend on itself.
+x-needs-bootstrap: &needs-bootstrap
+  op-bootstrap:
+    condition: service_completed_successfully
+
+services:
+  # One-shot: mints every agent's config, exchanges the invitations between
+  # them, and writes the bridge invite the others mount read-only.
+  op-bootstrap:
+    <<: *agent
+    entrypoint: ["/usr/local/bin/op-bootstrap"]
+    restart: "no"
+
+  op-portal:
+    <<: *agent
+    entrypoint: ["op-portal", "-c", "/op-config/portal/config.toml", "run"]
+    depends_on: *needs-bootstrap
+
+  op-provider:
+    <<: *agent
+    entrypoint: ["op-provider", "-c", "/op-config/provider/config.toml", "run"]
+    depends_on: *needs-bootstrap
+
+  op-clusters:
+    <<: *agent
+    entrypoint: ["op-clusters", "-c", "/op-config/clusters/config.toml", "run"]
+    depends_on: *needs-bootstrap
+
+  op-cluster:
+    <<: *agent
+    entrypoint: ["op-cluster", "-c", "/op-config/cluster/config.toml", "run"]
+    depends_on: *needs-bootstrap
+
+  # Stands in for a cluster login node: op-localaccount, op-filesystem and
+  # op-slurm side by side in one container, so the Unix groups the account
+  # agent creates are visible to the filesystem agent that chowns project
+  # directories to them (see node.sh). Each keeps its own name, config and
+  # port, and the aliases let peers dial them individually — signalbox shows
+  # three leaves because there are three agents, container count aside.
+  op-node:
+    <<: *agent
+    entrypoint: ["/usr/local/bin/op-node"]
+    depends_on: *needs-bootstrap
+    networks:
+      default:
+        aliases:
+          - op-filesystem
+          - op-slurm
+          - op-localaccount
+    volumes:
+      - openportal-config:/op-config
+      - openportal-invite:/openportal-invite
+      - openportal-home:/home
+      - openportal-projects:/projects
+
+  op-bridge:
+    <<: *agent
+    entrypoint: ["op-bridge", "-c", "/op-config/bridge/config.toml", "run"]
+    depends_on: *needs-bootstrap
+    healthcheck:
+      # The HTTP API is the stack's readiness gate. It answers before the chain
+      # below it has finished connecting, so this says "signalbox can talk to
+      # something", not "the network is up" — stack.sh waits for the agents.
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import socket; socket.create_connection(('localhost', 3000), 2)",
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  # Agent configs and the exchanged invitations, written once by op-bootstrap.
+  openportal-config:
+  # The bridge invite. Named so detect.sh's `*openportal-invite` match finds
+  # it; run.sh and tui.sh mount this volume at /inv.
+  openportal-invite:
+  # Home and project directories op-filesystem manages.
+  openportal-home:
+  openportal-projects:

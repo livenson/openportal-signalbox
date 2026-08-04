@@ -24,6 +24,9 @@ cd openportal-signalbox
 ./tui.sh          # or ./run.sh, then open http://localhost:8900
 ```
 
+No agent network to hand? `./stack.sh up` builds a throwaway eight-agent one —
+see [A network to point it at](#a-network-to-point-it-at).
+
 Everything comes from the bridge's signed HTTP API — `health()` for the agent
 tree, `diagnostics(destination)` for one agent's jobs, warnings and log — so no
 agent needs changing and nothing is installed alongside them.
@@ -109,16 +112,58 @@ A job still pending when the wait expires is reported as a failure rather than
 a success — an instruction aimed at an unroutable agent is never rejected, it
 simply never lands, and calling that "ok" would read as a pass.
 
-## Two things that look broken but are not
+## A network to point it at
+
+`./stack.sh up` builds a throwaway eight-agent network — the same shape as a
+real deployment, with no portal software behind it — and `run.sh` and `tui.sh`
+find it exactly as they find anything else.
+
+```bash
+./stack.sh up        # under a minute, cold
+./tui.sh             # or ./run.sh
+./stack.sh status    # what the bridge sees
+./stack.sh down      # and its volumes
+```
+
+```
+op-bridge → op-portal("waldur") → op-provider → op-clusters (platform)
+  → op-cluster (instance) → op-filesystem + op-slurm + op-localaccount
+```
+
+All eight agents come from upstream's release binaries — statically linked,
+~8 MB each — dropped into one image. Upstream also publishes per-agent OCI
+images, but not for `op-localaccount`, and they are the wrong shape here
+anyway: the leaf agents shell out (`op-localaccount` to `useradd`, `op-slurm`
+to `sacctmgr`), which a distroless image has nothing to run.
+
+The three leaves share one container, because op-localaccount creates the Unix
+group and op-filesystem chowns to it — split apart, every `add_project` fails
+on a group the filesystem agent cannot see. They keep separate identities and
+ports, so signalbox shows them as the three agents they are.
+
+This is a development stack in the fullest sense: the invite it mints is a
+full-control credential, and the console will create real users and groups
+inside it. That is what it is for.
+
+## Three things that look broken but are not
 
 **`Dropping notification … after 3 failed signal attempts`** in agent logs. If
 the bridge was initialised without `--notification-url` it keeps its default of
 `http://localhost/notification`, which nothing serves, so every notification is
 retried three times and dropped. Portal software that implements no
-notification receiver (Waldur, today) loses nothing by this.
+notification receiver (Waldur, today) loses nothing by this — and `stack.sh`,
+which has no portal software at all, logs it constantly.
 
 **`<portal>.<agent> get_projects <portal>` errors.** See "register offering"
 above — that address has to be a registered offering, not an agent name.
+
+**`401 Unauthorized … Date is outside acceptable time window`.** Not the
+invite. Every request is signed with a `Date`, and the bridge rejects one more
+than **five seconds** from its own clock — so this is clock skew between
+wherever signalbox runs and wherever the bridge runs, and under Docker Desktop
+it also shows up on its own after the VM's clock jumps. Retrying works; a
+container restart fixes it for good. Worth knowing because a 401 otherwise
+reads as a bad key.
 
 ## Limitations
 
@@ -139,32 +184,48 @@ above — that address has to be a registered offering, not an agent name.
 ## Development
 
 ```bash
-pip install pytest && python -m pytest      # 36 tests, ~5s
+pip install pytest && python -m pytest      # 56 tests, ~5s, no network
 ruff check . && ruff format --check .
+
+./stack.sh up && ./live.sh                  # 22 more, against real agents
 ```
 
-The suite fakes the compiled `openportal` module rather than installing it —
-the real one is useless without a live agent network, which CI cannot provide.
-The fake deliberately keeps the bindings' quirks, most notably that
-`HealthInfo` exposes `peers` as a method while its neighbours are properties;
-smoothing that over would test the wrong thing.
+The offline suite fakes the compiled `openportal` module rather than installing
+it — the real one is useless without a live agent network. The fake
+deliberately keeps the bindings' quirks, most notably that `HealthInfo` exposes
+`peers` as a method while its neighbours are properties; smoothing that over
+would test the wrong thing.
 
-Tests are weighted towards what actually broke while building this: the
-property-vs-method inconsistency, reciprocal peer links that turn a tree walk
-into a loop, filtering that ate its own limit, a job reported as successful
-when it had not finished, and a cache keyed without its filters.
+Those tests are weighted towards what actually broke while building this: the
+property-vs-method inconsistency, peer links that turn a tree walk into a loop,
+filtering that ate its own limit, a job reported as successful when it had not
+finished, and a cache keyed without its filters. `tests/test_stack.py` adds the
+contract between the stack and the launchers — the compose service and volume
+names discovery matches on, and the version pin, which has to be one release
+across client and agents because a mismatch fails as an authentication error
+rather than a version warning.
 
-CI additionally runs shellcheck over the launchers and parses the viewer's
-inline module with `node --check`, since a syntax error there would otherwise
-only appear in a browser.
+`tests/test_live.py` closes the gap the fake cannot: it asserts the same
+documented constraints against agents that actually exist — that `peers` really
+is a method, that a router really does refuse to execute, that polling really
+does log itself, that an unroutable destination really does come back
+unfinished rather than rejected. A fake is only ever as correct as our reading
+of the bindings, and this is what checks the reading. Run it with `./live.sh`,
+which puts pytest inside the agent network the same way `run.sh` puts the proxy
+there; on its own, `python -m pytest` deselects it.
+
+CI runs the offline suite on every push, and the live one nightly and on
+demand — the agents are pinned to a commit, but the client comes from PyPI and
+the base images move under both.
 
 ## Status
 
-A working prototype, developed against OpenPortal 0.90.0 and a Waldur portal.
+A working prototype, developed against OpenPortal 0.91.0 and a Waldur portal.
 
-**Not covered by tests:** anything that needs a live agent network, and the
-viewer's browser behaviour beyond parsing. Both were verified by hand against a
-real eight-agent stack. Issues and patches welcome.
+**Not covered by tests:** the viewer's browser behaviour beyond parsing, and
+anything needing portal software behind the portal agent — `stack.sh` has none,
+so the incoming direction is exercised only as far as registering an offering.
+Issues and patches welcome.
 
 ## Licence
 
