@@ -99,11 +99,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Both shapes in stack/topologies/. `chain` is the one the front ends
-        # were designed against; `multi-allocator` is two allocators sharing a
-        # provider and two clusters, which is where the suite has to hold
+        # Every shape in stack/topologies/. `chain` is the one the front ends
+        # were designed against; `multi-allocator` shares a provider between
+        # two allocators; `zoned` separates two estates so completely that a
+        # bridge sees only its own. The suite has to hold across all three
         # without knowing the shape in advance.
-        topology: [chain, multi-allocator]
+        topology: [chain, multi-allocator, zoned]
     steps:
       - uses: actions/checkout@v5
       - name: build and start the agent network

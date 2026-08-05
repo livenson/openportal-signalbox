@@ -102,31 +102,36 @@ done
 # had the wrong way round until 0.91.0 (isambard-sc/openportal#21). Each pair
 # runs in its own directory so concurrent invites cannot tread on one another.
 #
-# Neither --type nor --zone is passed. 0.91.0 added both: --type declares what
-# an agent must present itself as, and declaring a peer `type = "portal"`
-# switches on portal route discovery, where agents derive the route to each
-# portal and refuse traffic that does not match. --zone is what an operator
-# would use to stop two allocators' messages meeting at all. Both are exactly
-# wrong in a tool for looking at broken routing, so peers are left unchecked
-# and everything shares the default zone.
+# --type is never passed. 0.91.0 added it to declare what an agent must present
+# itself as, and declaring a peer `type = "portal"` switches on portal route
+# discovery, where agents derive the route to each portal and refuse traffic
+# that does not match — exactly wrong in a tool for looking at broken routing.
+#
+# --zone is passed when a topology asks for it (a third field on the WIRES
+# entry). A zone is a named trust domain: it must match on both sides of a
+# connection and is checked again on every message, so two estates in different
+# zones cannot exchange anything even while sharing a host. Default is the
+# literal zone "default", which is what every other topology uses.
 wire() {
-    local listener=$1 dialer=$2 dialer_name listener_name workdir
+    local listener=$1 dialer=$2 zone=${3:-default} dialer_name listener_name workdir
     dialer_name=$(svc_name "$dialer")
     listener_name=$(svc_name "$listener")
     workdir=$(mktemp -d)
-    echo "==> Wiring ${dialer} -> ${listener} (dials in as '${dialer_name}')"
+    echo "==> Wiring ${dialer} -> ${listener} (dials in as '${dialer_name}', zone ${zone})"
     (
         cd "$workdir"
         "$(binary "$listener")" -c "$(conf "$listener")" \
-            client --add "$dialer_name" --ip "$CIDR"
+            client --add "$dialer_name" --ip "$CIDR" --zone "$zone"
+        # The invite is named after the issuing agent *and* the zone it admits
+        # the client into.
         "$(binary "$dialer")" -c "$(conf "$dialer")" \
-            server --add "invite_${listener_name}_default.toml"
+            server --add "invite_${listener_name}_${zone}.toml"
     )
     rm -rf "$workdir"
 }
 
 for pair in "${WIRES[@]}"; do
-    wire "$(field "$pair" 1)" "$(field "$pair" 2)"
+    wire "$(field "$pair" 1)" "$(field "$pair" 2)" "$(field "$pair" 3)"
 done
 
 echo "==> Applying agent-specific options"
@@ -175,9 +180,48 @@ for entry in "${AGENTS[@]}"; do
     echo "    ${INVITE_DIR}/${dir}-invite.toml"
 done
 
-# What the readiness probe should wait for. Written here rather than hardcoded
-# in probe.py, because the answer is whatever topology was selected.
-for entry in "${AGENTS[@]}"; do field "$entry" 2; done >"${INVITE_DIR}/expected-agents.txt"
+# What the readiness probe should wait for — per bridge, not per topology.
+#
+# A bridge sees its own zone and nothing else: zones are checked on the
+# connection and again on every message, so an estate in another zone is not
+# merely unreachable but absent from the health report. Expecting every agent
+# in the file would therefore fail a perfectly healthy zoned host.
+#
+# The set is the wire graph's connected component containing that bridge, which
+# is exactly one zone's estate, because a wire carries a single zone.
+reachable_from() {
+    local frontier=("$1") seen=" $1 " next=() cur pair a b other
+    while [ "${#frontier[@]}" -gt 0 ]; do
+        next=()
+        for cur in "${frontier[@]}"; do
+            for pair in "${WIRES[@]}"; do
+                a=$(field "$pair" 1)
+                b=$(field "$pair" 2)
+                other=""
+                [ "$a" = "$cur" ] && other=$b
+                [ "$b" = "$cur" ] && other=$a
+                [ -n "$other" ] || continue
+                case "$seen" in
+                    *" $other "*) ;;
+                    *) seen="${seen}${other} "; next+=("$other") ;;
+                esac
+            done
+        done
+        frontier=("${next[@]}")
+    done
+    echo "$seen"
+}
+
+for entry in "${AGENTS[@]}"; do
+    dir=$(field "$entry" 1)
+    [ "$(field "$entry" 4)" = "op-bridge" ] || continue
+    : >"${INVITE_DIR}/expected-agents-${dir}.txt"
+    for reachable in $(reachable_from "$dir"); do
+        svc_name "$reachable" >>"${INVITE_DIR}/expected-agents-${dir}.txt"
+    done
+done
+# The bridge discovery finds, so live.sh and the probe have a default.
+cp "${INVITE_DIR}/expected-agents-bridge.txt" "${INVITE_DIR}/expected-agents.txt"
 
 # Deliberately no chmod. 0.91.0 writes configs and the bridge invite owner-only
 # and atomically, because both carry key material; widening them again would

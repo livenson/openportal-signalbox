@@ -123,13 +123,13 @@ services:
     <<: *agent
     entrypoint: ["op-portal", "-c", "/op-config/portal2/config.toml", "run"]
     depends_on: *needs-bootstrap
-    profiles: [multi-allocator]
+    profiles: [multi-allocator, zoned]
 
   op-bridge2:
     <<: *agent
     entrypoint: ["op-bridge", "-c", "/op-config/bridge2/config.toml", "run"]
     depends_on: *needs-bootstrap
-    profiles: [multi-allocator]
+    profiles: [multi-allocator, zoned]
     healthcheck:
       test:
         [
@@ -146,13 +146,13 @@ services:
     <<: *agent
     entrypoint: ["op-cluster", "-c", "/op-config/cluster2/config.toml", "run"]
     depends_on: *needs-bootstrap
-    profiles: [multi-allocator]
+    profiles: [multi-allocator, zoned]
 
   op-node2:
     <<: *agent
     entrypoint: ["/usr/local/bin/op-node"]
     depends_on: *needs-bootstrap
-    profiles: [multi-allocator]
+    profiles: [multi-allocator, zoned]
     environment:
       RUST_LOG: "${OPENPORTAL_LOG_LEVEL:-info}"
       STACK_TOPOLOGY: "${STACK_TOPOLOGY:-chain}"
@@ -168,6 +168,23 @@ services:
       - openportal-invite:/openportal-invite
       - openportal-home2:/home
       - openportal-projects2:/projects
+
+  # --- zoned only -----------------------------------------------------------
+  #
+  # The second estate's own router chain. multi-allocator shares one provider
+  # between its two allocators; zoned shares nothing, so it needs these.
+
+  op-provider2:
+    <<: *agent
+    entrypoint: ["op-provider", "-c", "/op-config/provider2/config.toml", "run"]
+    depends_on: *needs-bootstrap
+    profiles: [zoned]
+
+  op-clusters2:
+    <<: *agent
+    entrypoint: ["op-clusters", "-c", "/op-config/clusters2/config.toml", "run"]
+    depends_on: *needs-bootstrap
+    profiles: [zoned]
 
 volumes:
   # Agent configs and the exchanged invitations, written once by op-bootstrap.

@@ -113,6 +113,15 @@ Three things it has to get right, each of which cost a debugging session in
 - **Invite files are named after the issuing agent**, not the client they
   admit — the upstream worked example had this backwards until 0.91.0.
 
+**A zone is invisible from outside itself.** Zones are checked on the
+connection and again on every message, so an estate in another zone does not
+appear in the health report at all — it is absent, not disconnected. One
+signalbox instance therefore shows exactly one zone, which is why
+`stack/bootstrap.sh` writes the readiness expectation *per bridge* (the wire
+graph's connected component containing it) rather than per topology. Expecting
+every agent in the file would fail a perfectly healthy zoned host. Reproduce
+with `./stack.sh up zoned`.
+
 Two things 0.91.0 changed that the bootstrap depends on: configs and the invite
 are written **owner-only**, so it must not `chmod` them back (everything here
 runs as root, including the signalbox container); and `client --add --type`

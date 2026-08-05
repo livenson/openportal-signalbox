@@ -138,6 +138,13 @@ op-bridge → waldur (portal) → provider → clusters (platform)
   → cluster (instance) → filesystem + slurm + localaccount
 ```
 
+**`zoned`** — two estates on one host, separated by zone. Nothing is shared,
+and the separation is total: a bridge sees its own zone and the other estate is
+**absent from the health report**, not merely unreachable in it. So one
+signalbox shows one zone, and a zone-separated host needs one instance per
+zone. Point the second one at the other estate with
+`OPENPORTAL_BRIDGE_INVITE=/inv/bridge2-invite.toml ./run.sh`.
+
 **`multi-allocator`** — two allocators, each with its own portal and bridge,
 both allocating onto two shared clusters through one provider. Their traffic
 crosses on every shared hop, and `waldur.provider.clusters.cluster2` and
