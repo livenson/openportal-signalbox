@@ -49,9 +49,11 @@ export STACK_TOPOLOGY
 COMPOSE=(docker compose -f "${HERE}/stack/docker-compose.yml"
          --profile "$STACK_TOPOLOGY")
 AGENTS=(op-portal op-provider op-clusters op-cluster op-node op-bridge)
-if [ "$STACK_TOPOLOGY" = "multi-allocator" ]; then
-    AGENTS+=(op-portal2 op-bridge2 op-cluster2 op-node2)
-fi
+case "$STACK_TOPOLOGY" in
+    multi-allocator) AGENTS+=(op-portal2 op-bridge2 op-cluster2 op-node2) ;;
+    zoned) AGENTS+=(op-portal2 op-bridge2 op-cluster2 op-node2
+                    op-provider2 op-clusters2) ;;
+esac
 
 case "$ACTION" in
     up)

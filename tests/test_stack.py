@@ -197,7 +197,11 @@ def topology(name):
     for entry in array("AGENTS"):
         directory, agent, port, binary = entry.split(":")
         agents[directory] = {"name": agent, "port": port, "binary": binary}
-    wires = [tuple(w.split(":")) for w in array("WIRES")]
+    wires = []
+    for entry in array("WIRES"):
+        parts = entry.split(":")
+        # listener:dialer[:zone] — zone defaults to the literal "default".
+        wires.append((parts[0], parts[1], parts[2] if len(parts) > 2 else "default"))
     return agents, wires
 
 
@@ -257,9 +261,24 @@ def test_every_wired_agent_has_a_binary_the_image_carries(name):
 @pytest.mark.parametrize("name", TOPOLOGIES)
 def test_wires_only_reference_declared_agents(name):
     agents, wires = topology(name)
-    for listener, dialer in wires:
+    for listener, dialer, _zone in wires:
         assert listener in agents, f"{name}: wire to undeclared '{listener}'"
         assert dialer in agents, f"{name}: wire from undeclared '{dialer}'"
+
+
+# The agent type each binary reports, which is what opdata.walk keys the
+# portal rule off. Faking them all as one type would let a topology test pass
+# while the rule it is meant to exercise never fires.
+AGENT_TYPES = {
+    "op-portal": "portal",
+    "op-provider": "provider",
+    "op-clusters": "platform",
+    "op-cluster": "instance",
+    "op-bridge": "bridge",
+    "op-filesystem": "filesystem",
+    "op-slurm": "scheduler",
+    "op-localaccount": "account",
+}
 
 
 def peer_graph(name):
@@ -270,31 +289,40 @@ def peer_graph(name):
     is narrower; see test_live.py.
     """
     agents, wires = topology(name)
-    nodes = {d: FakeHealthInfo(a["name"], "agent") for d, a in agents.items()}
-    for listener, dialer in wires:
+    nodes = {d: FakeHealthInfo(a["name"], AGENT_TYPES[a["binary"]]) for d, a in agents.items()}
+    for listener, dialer, _zone in wires:
         nodes[listener]._peers[agents[dialer]["name"]] = nodes[dialer]
         nodes[dialer]._peers[agents[listener]["name"]] = nodes[listener]
     return agents, nodes
 
 
 @pytest.mark.parametrize("name", TOPOLOGIES)
-def test_the_topology_is_one_connected_acyclic_graph(name):
-    """Every agent reachable from a bridge, and no agent wired twice.
+def test_each_bridge_sees_an_acyclic_estate_and_together_they_cover_it(name):
+    """Every agent reachable from some bridge, and none wired twice.
 
-    OpenPortal requires this: portal route discovery derives each agent's route
-    from its peers and treats a second route to the same portal as an impostor,
-    "because the topology is single-pathed and acyclic". A stray extra wire is
-    not a nicety — it is a denial of service at the far end.
+    OpenPortal requires acyclicity: portal route discovery derives each agent's
+    route from its peers and treats a second route to the same portal as an
+    impostor, "because the topology is single-pathed and acyclic". A stray extra
+    wire is not a nicety — it is a denial of service at the far end.
+
+    Coverage is per *bridge* rather than for the graph as a whole, because a
+    zone-separated host has one estate per zone and a bridge sees only its own.
+    Every agent must still be somebody's.
     """
     agents, nodes = peer_graph(name)
     bridges = [d for d, a in agents.items() if a["binary"] == "op-bridge"]
     assert bridges, f"{name} has no bridge, so signalbox cannot see it at all"
 
-    walked, edges = [], []
-    opdata.walk(nodes[bridges[0]], "", 0, walked, edges, set())
+    covered = set()
+    for bridge in bridges:
+        walked, edges = [], []
+        opdata.walk(nodes[bridge], "", 0, walked, edges, set())
+        assert len(edges) == len(walked) - 1, f"{name}: a shortcut or a second route"
+        covered |= {node["name"] for node in walked}
 
-    assert len(walked) == len(agents), f"{name}: an agent is unreachable from {bridges[0]}"
-    assert len(edges) == len(agents) - 1, f"{name}: a shortcut or a second route"
+    assert covered == {a["name"] for a in agents.values()}, (
+        f"{name}: an agent is unreachable from any bridge"
+    )
 
 
 def test_the_chain_gives_the_destinations_the_front_ends_address():
@@ -330,29 +358,71 @@ def test_both_clusters_are_addressable_from_either_allocator():
             assert paths[cluster] == f"{portal}.provider.clusters.{cluster}", paths[cluster]
 
 
-def test_the_other_allocator_is_rendered_below_this_ones_provider():
-    """A known wrong picture, pinned so it cannot change unnoticed.
+def test_a_peer_allocators_agents_have_no_route():
+    """Reachable to ask about, not addressable to instruct.
 
-    Not for want of information: the health report carries `agent_type`, and
-    `hpcportal` reports `portal` (checked against a live stack, as is the rest
-    of this). opdata reads it too — it is what `node["type"]` is built from, and
-    what the graph draws the portal icon from. `walk()` simply does not consult
-    it when building paths, so hpcportal is reached through waldur's provider
-    and handed `waldur.provider.hpcportal` — a path that reads as a downstream
-    agent of waldur's and is not a route an instruction can use. Also verified
-    live: `diagnostics()` on that path *works*, so the node opens in the
-    inspector and looks legitimate, while an instruction sent to it never lands.
+    Two different questions that look like one. Diagnostics is routed hop by
+    hop across the peer graph, so the traversal path reaches the other
+    allocator and `id` keeps it — the inspector works, which is worth having on
+    a shared estate. An *instruction* is addressed <portal>.<agent>... rooted
+    at the portal that owns the agent, and there is no such route from here, so
+    `route` is None rather than a destination that would silently never land.
 
-    If opdata ever learns to re-root or mark peer portals, this is the test
-    that should change.
+    Checked live too, both halves: see test_live.py.
     """
     _, nodes = peer_graph("multi-allocator")
     walked, edges = [], []
     opdata.walk(nodes["bridge"], "", 0, walked, edges, set())
-    paths = {n["name"]: n["id"] for n in walked}
+    by_name = {n["name"]: n for n in walked}
 
-    assert paths["hpcportal"] == "waldur.provider.hpcportal"
-    assert paths["bridge2"] == "waldur.provider.hpcportal.bridge2"
+    for name in ("hpcportal", "bridge2"):
+        assert by_name[name]["route"] is None, name
+        assert by_name[name]["allocator"] == "peer", name
+
+    # Still reachable to ask about, and still drawn attached to the shared hop.
+    assert by_name["hpcportal"]["id"] == "waldur.provider.hpcportal"
+    assert ("provider", "hpcportal") in {(e["source"], e["target"]) for e in edges}
+
+
+def test_our_own_agents_keep_a_route_equal_to_their_path():
+    """Marking the peer estate must not disturb the one we can drive.
+
+    Everything the bridge's own portal owns — including the clusters the two
+    allocators share, which we reach through our own portal — keeps a route,
+    and it is the same dotted path the inspector uses.
+    """
+    _, nodes = peer_graph("multi-allocator")
+    walked, edges = [], []
+    opdata.walk(nodes["bridge"], "", 0, walked, edges, set())
+    by_name = {n["name"]: n for n in walked}
+
+    for name in ("bridge", "waldur", "provider", "clusters", "cluster1", "cluster2", "fs1"):
+        node = by_name[name]
+        assert node["route"] == node["id"], name
+        assert node["allocator"] == "own", name
+
+    assert by_name["cluster2"]["route"] == "waldur.provider.clusters.cluster2"
+
+
+# What the discoverable bridge should find it cannot instruct. Only an estate
+# shared with another allocator has any: separate zones do not share a graph at
+# all, so the other estate never appears to be marked.
+UNROUTABLE = {
+    "chain": set(),
+    "multi-allocator": {"hpcportal", "bridge2"},
+    "zoned": set(),
+}
+
+
+@pytest.mark.parametrize("name", TOPOLOGIES)
+def test_only_a_shared_estate_has_unroutable_agents(name):
+    """The mark must fire where allocators share, and nowhere else."""
+    assert name in UNROUTABLE, f"{name} is new — say what it should mark"
+    _, nodes = peer_graph(name)
+    walked, edges = [], []
+    opdata.walk(nodes["bridge"], "", 0, walked, edges, set())
+
+    assert {n["name"] for n in walked if n["route"] is None} == UNROUTABLE[name]
 
 
 @pytest.mark.parametrize("name", TOPOLOGIES)
@@ -402,16 +472,30 @@ def test_the_bootstrap_does_not_widen_permissions_on_key_material():
     assert "chmod" not in BOOTSTRAP_CODE
 
 
-def test_peers_are_left_untyped_and_unzoned():
-    """`--type portal` switches on portal route discovery; `--zone` separates.
+def test_peers_are_left_untyped():
+    """`--type portal` switches on portal route discovery.
 
-    Both are what an operator deploying this would want, and both are wrong
-    here: signalbox exists to show broken routing, and zones would stop the two
-    allocators' traffic meeting on the shared hops at all — which is the thing
-    the multi-allocator topology is for looking at.
+    Agents then derive the route to each portal and refuse traffic that does
+    not match. That is what an operator deploying this would want, and it is
+    wrong in a tool whose job is to show broken routing.
     """
     assert "--type" not in BOOTSTRAP_CODE
-    assert "--zone" not in BOOTSTRAP_CODE
+
+
+@pytest.mark.parametrize("name", TOPOLOGIES)
+def test_a_zone_is_only_used_where_a_topology_asks_for_one(name):
+    """Zones are opt-in per wire, and the default has to stay `default`.
+
+    A zone must match on both sides and is re-checked on every message, so an
+    accidental zone on one link severs it — and severs it invisibly, since the
+    far side then does not appear in the health report at all.
+    """
+    _, wires = topology(name)
+    zones = {zone for _, _, zone in wires}
+    if name == "zoned":
+        assert zones == {"alpha", "beta"}, zones
+    else:
+        assert zones == {"default"}, zones
 
 
 @pytest.mark.parametrize("script", ["bootstrap.sh", "node.sh"])

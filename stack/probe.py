@@ -26,13 +26,19 @@ import time
 # and each shows the estate as that allocator sees it.
 INVITE = os.getenv("OPENPORTAL_BRIDGE_INVITE", "/openportal-invite/bridge-invite.toml")
 
-# Written by bootstrap.sh from the selected topology, rather than hardcoded:
-# the answer is however many agents that topology wires.
-EXPECTED_FILE = "/openportal-invite/expected-agents.txt"
-
 
 def expected():
-    with open(EXPECTED_FILE) as handle:
+    """Agents this bridge should see, written by bootstrap.sh.
+
+    Per bridge, not per topology: a bridge sees its own zone and nothing else,
+    so on a zone-separated host the other estate is absent from the health
+    report rather than unhealthy in it.
+    """
+    per_bridge = INVITE.rsplit("/", 1)[-1].replace("-invite.toml", "")
+    path = f"/openportal-invite/expected-agents-{per_bridge}.txt"
+    if not os.path.exists(path):
+        path = "/openportal-invite/expected-agents.txt"
+    with open(path) as handle:
         return [line.strip() for line in handle if line.strip()]
 
 
