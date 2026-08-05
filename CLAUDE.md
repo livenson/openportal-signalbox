@@ -162,16 +162,25 @@ both are views a tool refreshing every few seconds tends to be sitting on.
 filter over-fetches then trims, so dropped chatter does not eat the caller's
 limit.
 
-**Nothing marks a peer as another allocator.** On an estate where two portals
-share a provider, walking out from one bridge reaches the other portal *through*
-that provider and gives it a path like `waldur.provider.hpcportal` — which reads
-as a downstream agent and is not a route. `diagnostics()` on it works, so the
-node opens in the inspector and looks fine; an instruction sent to it never
-lands. Reproduce with `./stack.sh up multi-allocator`; pinned by
+**`walk()` ignores `agent_type` when building paths.** On an estate where two
+portals share a provider, walking out from one bridge reaches the other portal
+*through* that provider and gives it a path like `waldur.provider.hpcportal` —
+which reads as a downstream agent and is not a route. `diagnostics()` on it
+works, so the node opens in the inspector and looks fine; an instruction sent to
+it never lands.
+
+The information is not missing, which is worth being precise about: the health
+report carries `agent_type` on every agent, `hpcportal` reports `portal`, and
+`node_of()` already surfaces it as `node["type"]` — the graph draws that card
+with the portal icon *because* it knows. Only the path construction ignores it.
+Nor is "another allocator" ambiguous: OpenPortal roots every route at a portal
+and forbids a portal from querying another, so a portal reached below the
+root's own portal is by construction a different allocator.
+
+Reproduce with `./stack.sh up multi-allocator`; pinned by
 `test_the_other_allocator_is_rendered_below_this_ones_provider`. Fixing it means
-cutting or marking a peer whose `agent_type` is `portal` and which is not the
-root's own portal — do not simply drop portals, or the estate loses its second
-half entirely.
+re-rooting or marking such a peer — do not simply drop portals, or the estate
+loses its second half entirely.
 
 **Routers never increment completed counters**, so the graph's edge animation
 derives throughput from each agent's completed delta and pushes it *up its own

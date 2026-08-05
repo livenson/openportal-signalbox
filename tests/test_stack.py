@@ -333,15 +333,18 @@ def test_both_clusters_are_addressable_from_either_allocator():
 def test_the_other_allocator_is_rendered_below_this_ones_provider():
     """A known wrong picture, pinned so it cannot change unnoticed.
 
-    Nothing in the health report says "this peer is another allocator", so the
-    walk reaches hpcportal through waldur's provider and gives it the path
-    `waldur.provider.hpcportal` — which reads as a downstream agent of waldur's
-    and is not a route an instruction can use. Verified against a live stack:
-    `diagnostics()` on that path *works* (the inspector opens, so the node
-    looks legitimate) while an instruction sent to it never lands.
+    Not for want of information: the health report carries `agent_type`, and
+    `hpcportal` reports `portal` (checked against a live stack, as is the rest
+    of this). opdata reads it too — it is what `node["type"]` is built from, and
+    what the graph draws the portal icon from. `walk()` simply does not consult
+    it when building paths, so hpcportal is reached through waldur's provider
+    and handed `waldur.provider.hpcportal` — a path that reads as a downstream
+    agent of waldur's and is not a route an instruction can use. Also verified
+    live: `diagnostics()` on that path *works*, so the node opens in the
+    inspector and looks legitimate, while an instruction sent to it never lands.
 
-    If opdata ever learns to mark or cut peer portals, this is the test that
-    should change.
+    If opdata ever learns to re-root or mark peer portals, this is the test
+    that should change.
     """
     _, nodes = peer_graph("multi-allocator")
     walked, edges = [], []

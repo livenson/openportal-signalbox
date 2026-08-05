@@ -360,3 +360,34 @@ def test_an_agent_name_is_not_an_offering_address(writable):
     """
     result = opdata.run_command("waldur.provider get_projects waldur", 20_000)
     assert result["ok"] is False, result
+
+
+def test_a_peer_portal_is_typed_even_though_its_path_ignores_that(live_topology):
+    """The health report identifies a second allocator; the path does not use it.
+
+    This exists because the opposite was once written down here — that nothing
+    in the report distinguishes another allocator. It does: `agent_type` comes
+    back for every agent and reads `portal`, and opdata already surfaces it as
+    `node["type"]`, which is what the graph draws the portal icon from.
+
+    What is missing is only that `walk()` does not consult it, so a portal
+    reached below the root's own gets a path extending the agent it was reached
+    through. Both halves are asserted here, so neither can drift: the type is
+    present, and the path is still wrong.
+    """
+    portals = [node for node in live_topology["nodes"] if node["type"] == "portal"]
+    assert portals, "no portal reported at all"
+
+    # Depth 1 is the root bridge's own portal; anything deeper was reached
+    # through a shared agent, and OpenPortal roots every route at a portal, so
+    # by construction it belongs to someone else.
+    others = [node for node in portals if node["depth"] > 1]
+    if not others:
+        pytest.skip("single-allocator network — nothing to confuse with a peer")
+
+    for node in others:
+        assert node["type"] == "portal", node
+        assert "." in node["id"], (
+            f"{node['name']} now roots its own path — walk() has learned to use "
+            "agent_type, so this test and the docs around it should change"
+        )
