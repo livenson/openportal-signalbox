@@ -196,9 +196,13 @@ The multi-allocator topology exists because it is the shape signalbox draws
 it. Two allocators sharing a provider is a real deployment; a national service
 sold through more than one allocation route is exactly this picture.
 
-Nothing in a health report says "this peer is another allocator". So walking out
-from one bridge reaches the other allocator *through the shared provider*, and
-gives it a path that reads as a downstream agent:
+The health report *does* say what that peer is — every agent carries
+`agent_type`, and `hpcportal` reports `portal`. signalbox reads it, and the
+card in the picture below is drawn with the portal icon and badge because of
+it. What `opdata.walk()` does not do is *act* on it: every peer extends the
+path it was reached by, whatever its type. So walking out from one bridge
+reaches the other allocator through the shared provider and hands it a path
+that reads as a downstream agent:
 
 ```
 waldur.provider.hpcportal            ← the other allocator's portal
@@ -211,7 +215,10 @@ Above: `./stack.sh up multi-allocator`. Work flows through both clusters, and
 `hpcportal` with its `bridge2` hangs off `provider` on a dead link at the
 bottom — the second allocator drawn as if it reported to the first.
 
-Neither is a route an instruction can use. The trap is that they are not
+Neither is a route an instruction can use, and the fix is not blocked on
+missing information: a portal reached below the root's own portal is another
+allocator, because OpenPortal roots every route at a portal and forbids a
+portal from querying another. The trap is that they are not
 obviously wrong: `diagnostics()` on those paths **works**, so the node opens in
 the inspector and looks legitimate, while an instruction aimed at it never
 lands — it just sits non-terminal until the wait expires. The hierarchy is also
