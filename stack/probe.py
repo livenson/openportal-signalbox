@@ -18,21 +18,22 @@ Kept independent of opdata.py — this ships inside the agent image, which has n
 copy of the repo.
 """
 
+import os
 import sys
 import time
 
-INVITE = "/openportal-invite/bridge-invite.toml"
+# Which allocator's view to take. A topology with two bridges has two invites,
+# and each shows the estate as that allocator sees it.
+INVITE = os.getenv("OPENPORTAL_BRIDGE_INVITE", "/openportal-invite/bridge-invite.toml")
 
-EXPECTED = [
-    "bridge",
-    "waldur",
-    "provider",
-    "clusters",
-    "cluster",
-    "filesystem",
-    "slurm",
-    "localaccount",
-]
+# Written by bootstrap.sh from the selected topology, rather than hardcoded:
+# the answer is however many agents that topology wires.
+EXPECTED_FILE = "/openportal-invite/expected-agents.txt"
+
+
+def expected():
+    with open(EXPECTED_FILE) as handle:
+        return [line.strip() for line in handle if line.strip()]
 
 
 def attr(obj, name, default=None):
@@ -79,6 +80,7 @@ def snapshot():
 
 def main():
     deadline = time.monotonic() + (float(sys.argv[1]) if len(sys.argv) > 1 else 0)
+    wanted = expected()
     agents, problem = {}, "no health report yet"
 
     while True:
@@ -86,7 +88,7 @@ def main():
             agents = snapshot()
             problem = ", ".join(
                 f"{n} ({'not connected' if n in agents else 'missing'})"
-                for n in EXPECTED
+                for n in wanted
                 if not agents.get(n)
             )
             if not problem:
@@ -97,14 +99,14 @@ def main():
             break
         time.sleep(3)
 
-    for name in EXPECTED:
+    for name in wanted:
         state = "ok" if agents.get(name) else "DOWN"
         print(f"  {name:<14} {state}")
 
     if problem:
         print(f"\nagent chain incomplete: {problem}", file=sys.stderr)
         return 1
-    print(f"\nall {len(EXPECTED)} agents connected")
+    print(f"\nall {len(wanted)} agents connected")
     return 0
 
 

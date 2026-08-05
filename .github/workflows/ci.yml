@@ -96,10 +96,18 @@ jobs:
   live:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both shapes in stack/topologies/. `chain` is the one the front ends
+        # were designed against; `multi-allocator` is two allocators sharing a
+        # provider and two clusters, which is where the suite has to hold
+        # without knowing the shape in advance.
+        topology: [chain, multi-allocator]
     steps:
       - uses: actions/checkout@v5
       - name: build and start the agent network
-        run: ./stack.sh up
+        run: ./stack.sh up ${{ matrix.topology }}
       - name: live suite
         run: ./live.sh
       - name: agent logs

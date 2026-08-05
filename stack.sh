@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # Bring up a throwaway OpenPortal agent network for signalbox to point at.
 #
-#   ./stack.sh up        build the agents and start the chain, wait for it
-#   ./stack.sh down      stop it and delete its volumes
-#   ./stack.sh status    what the bridge currently sees
-#   ./stack.sh logs      follow every agent
+#   ./stack.sh up [topology]   start a network and wait for it to connect
+#   ./stack.sh down            stop it and delete its volumes
+#   ./stack.sh status          what the bridge currently sees
+#   ./stack.sh logs            follow every agent
+#   ./stack.sh topologies      what shapes are available
+#
+# Topologies live in stack/topologies/. The default, `chain`, is one allocator
+# and one cluster. `multi-allocator` is two of each, sharing a provider, which
+# is where signalbox stops being able to draw the truth — see the README.
 #
 # Then ./tui.sh or ./run.sh — they discover this stack the same way they
 # discover a real one, by the op-bridge container and the invite volume, so
@@ -23,11 +28,34 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 . "${HERE}/openportal.env"
 export OPENPORTAL_VERSION
 
-COMPOSE=(docker compose -f "${HERE}/stack/docker-compose.yml")
-AGENTS=(op-portal op-provider op-clusters op-cluster op-node op-bridge)
+ACTION="${1:-up}"
+# A topology is only chosen at `up`; afterwards it is whatever is running, and
+# the compose profile has to match or `down` would leave containers behind.
+if [ "$ACTION" = "up" ]; then
+    STACK_TOPOLOGY="${2:-${STACK_TOPOLOGY:-chain}}"
+    if [ ! -f "${HERE}/stack/topologies/${STACK_TOPOLOGY}.sh" ]; then
+        echo "No such topology '${STACK_TOPOLOGY}'. Available:" >&2
+        "$0" topologies >&2
+        exit 1
+    fi
+    echo "$STACK_TOPOLOGY" >"${HERE}/.stack-topology"
+elif [ -f "${HERE}/.stack-topology" ]; then
+    STACK_TOPOLOGY=$(cat "${HERE}/.stack-topology")
+else
+    STACK_TOPOLOGY="${STACK_TOPOLOGY:-chain}"
+fi
+export STACK_TOPOLOGY
 
-case "${1:-up}" in
+COMPOSE=(docker compose -f "${HERE}/stack/docker-compose.yml"
+         --profile "$STACK_TOPOLOGY")
+AGENTS=(op-portal op-provider op-clusters op-cluster op-node op-bridge)
+if [ "$STACK_TOPOLOGY" = "multi-allocator" ]; then
+    AGENTS+=(op-portal2 op-bridge2 op-cluster2 op-node2)
+fi
+
+case "$ACTION" in
     up)
+        echo "topology: ${STACK_TOPOLOGY}"
         "${COMPOSE[@]}" build
         "${COMPOSE[@]}" up -d --wait "${AGENTS[@]}"
         # --wait only proves the bridge's port is open; the chain below it
@@ -46,6 +74,13 @@ case "${1:-up}" in
         # -v because the invite and every agent key live in these volumes, and
         # a stale bootstrap stamp would otherwise skip the rewiring next time.
         "${COMPOSE[@]}" down -v --remove-orphans
+        rm -f "${HERE}/.stack-topology"
+        ;;
+    topologies)
+        for f in "${HERE}"/stack/topologies/*.sh; do
+            name=$(basename "$f" .sh)
+            printf '  %-16s %s\n' "$name" "$(sed -n '2s/^# //p' "$f")"
+        done
         ;;
     status)
         "${COMPOSE[@]}" ps
@@ -63,7 +98,7 @@ case "${1:-up}" in
         fi
         ;;
     *)
-        echo "usage: $0 {up|down|status|logs}" >&2
+        echo "usage: $0 {up [topology]|down|status|logs|topologies}" >&2
         exit 1
         ;;
 esac

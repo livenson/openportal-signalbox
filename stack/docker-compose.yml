@@ -27,6 +27,7 @@ x-agent: &agent
       OPENPORTAL_VERSION: "${OPENPORTAL_VERSION:?set by openportal.env via stack.sh}"
   environment:
     RUST_LOG: "${OPENPORTAL_LOG_LEVEL:-info}"
+    STACK_TOPOLOGY: "${STACK_TOPOLOGY:-chain}"
   volumes:
     - openportal-config:/op-config
     - openportal-invite:/openportal-invite
@@ -77,6 +78,10 @@ services:
     <<: *agent
     entrypoint: ["/usr/local/bin/op-node"]
     depends_on: *needs-bootstrap
+    environment:
+      RUST_LOG: "${OPENPORTAL_LOG_LEVEL:-info}"
+      STACK_TOPOLOGY: "${STACK_TOPOLOGY:-chain}"
+      NODE_AGENTS: "localaccount filesystem slurm"
     networks:
       default:
         aliases:
@@ -108,12 +113,71 @@ services:
       timeout: 3s
       retries: 30
 
+  # --- multi-allocator only -------------------------------------------------
+  #
+  # A second allocator (its own portal and its own bridge) and a second cluster,
+  # both reached through the provider the first allocator already uses. Started
+  # only under that profile; the chain topology never wires them.
+
+  op-portal2:
+    <<: *agent
+    entrypoint: ["op-portal", "-c", "/op-config/portal2/config.toml", "run"]
+    depends_on: *needs-bootstrap
+    profiles: [multi-allocator]
+
+  op-bridge2:
+    <<: *agent
+    entrypoint: ["op-bridge", "-c", "/op-config/bridge2/config.toml", "run"]
+    depends_on: *needs-bootstrap
+    profiles: [multi-allocator]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import socket; socket.create_connection(('localhost', 3000), 2)",
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  op-cluster2:
+    <<: *agent
+    entrypoint: ["op-cluster", "-c", "/op-config/cluster2/config.toml", "run"]
+    depends_on: *needs-bootstrap
+    profiles: [multi-allocator]
+
+  op-node2:
+    <<: *agent
+    entrypoint: ["/usr/local/bin/op-node"]
+    depends_on: *needs-bootstrap
+    profiles: [multi-allocator]
+    environment:
+      RUST_LOG: "${OPENPORTAL_LOG_LEVEL:-info}"
+      STACK_TOPOLOGY: "${STACK_TOPOLOGY:-chain}"
+      NODE_AGENTS: "localaccount2 filesystem2 slurm2"
+    networks:
+      default:
+        aliases:
+          - op-filesystem2
+          - op-slurm2
+          - op-localaccount2
+    volumes:
+      - openportal-config:/op-config
+      - openportal-invite:/openportal-invite
+      - openportal-home2:/home
+      - openportal-projects2:/projects
+
 volumes:
   # Agent configs and the exchanged invitations, written once by op-bootstrap.
   openportal-config:
   # The bridge invite. Named so detect.sh's `*openportal-invite` match finds
   # it; run.sh and tui.sh mount this volume at /inv.
   openportal-invite:
-  # Home and project directories op-filesystem manages.
+  # Home and project directories op-filesystem manages. One set per cluster:
+  # the two clusters are separate machines and do not share a filesystem.
   openportal-home:
   openportal-projects:
+  openportal-home2:
+  openportal-projects2:
