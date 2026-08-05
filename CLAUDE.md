@@ -162,25 +162,23 @@ both are views a tool refreshing every few seconds tends to be sitting on.
 filter over-fetches then trims, so dropped chatter does not eat the caller's
 limit.
 
-**`walk()` ignores `agent_type` when building paths.** On an estate where two
-portals share a provider, walking out from one bridge reaches the other portal
-*through* that provider and gives it a path like `waldur.provider.hpcportal` —
-which reads as a downstream agent and is not a route. `diagnostics()` on it
-works, so the node opens in the inspector and looks fine; an instruction sent to
-it never lands.
+**Reachable and addressable are different questions.** Diagnostics is routed
+hop by hop across the peer graph, so the traversal path reaches every agent the
+walk found. An instruction is addressed `<portal>.<agent>...` from the portal
+that *owns* the agent. On an estate where two allocators share a provider,
+those diverge: the second allocator is reachable to ask about and not
+addressable to instruct.
 
-The information is not missing, which is worth being precise about: the health
-report carries `agent_type` on every agent, `hpcportal` reports `portal`, and
-`node_of()` already surfaces it as `node["type"]` — the graph draws that card
-with the portal icon *because* it knows. Only the path construction ignores it.
-Nor is "another allocator" ambiguous: OpenPortal roots every route at a portal
-and forbids a portal from querying another, so a portal reached below the
-root's own portal is by construction a different allocator.
+So `node_of()` carries both — `id` (ask) and `route` (instruct, `None` when
+there is none), plus `allocator` as `own`/`peer`. The viewer targets `route`
+and only offers agents that have one. Re-rooting the *path* instead was tried
+and measured: it made the label honest and the node unqueryable at the same
+time, because `hpcportal` is not a destination this bridge can resolve.
 
-Reproduce with `./stack.sh up multi-allocator`; pinned by
-`test_the_other_allocator_is_rendered_below_this_ones_provider`. Fixing it means
-re-rooting or marking such a peer — do not simply drop portals, or the estate
-loses its second half entirely.
+A portal reached below the first hop is by construction another allocator's —
+OpenPortal roots every route at a portal and forbids a portal from querying
+another. `agent_type` is in the health report for every agent, so no guessing
+is involved. Reproduce with `./stack.sh up multi-allocator`.
 
 **Routers never increment completed counters**, so the graph's edge animation
 derives throughput from each agent's completed delta and pushes it *up its own

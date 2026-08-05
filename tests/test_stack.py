@@ -262,6 +262,21 @@ def test_wires_only_reference_declared_agents(name):
         assert dialer in agents, f"{name}: wire from undeclared '{dialer}'"
 
 
+# The agent type each binary reports, which is what opdata.walk keys the
+# portal rule off. Faking them all as one type would let a topology test pass
+# while the rule it is meant to exercise never fires.
+AGENT_TYPES = {
+    "op-portal": "portal",
+    "op-provider": "provider",
+    "op-clusters": "platform",
+    "op-cluster": "instance",
+    "op-bridge": "bridge",
+    "op-filesystem": "filesystem",
+    "op-slurm": "scheduler",
+    "op-localaccount": "account",
+}
+
+
 def peer_graph(name):
     """The peer graph a topology builds, as FakeHealthInfo objects.
 
@@ -270,7 +285,7 @@ def peer_graph(name):
     is narrower; see test_live.py.
     """
     agents, wires = topology(name)
-    nodes = {d: FakeHealthInfo(a["name"], "agent") for d, a in agents.items()}
+    nodes = {d: FakeHealthInfo(a["name"], AGENT_TYPES[a["binary"]]) for d, a in agents.items()}
     for listener, dialer in wires:
         nodes[listener]._peers[agents[dialer]["name"]] = nodes[dialer]
         nodes[dialer]._peers[agents[listener]["name"]] = nodes[listener]
@@ -330,29 +345,62 @@ def test_both_clusters_are_addressable_from_either_allocator():
             assert paths[cluster] == f"{portal}.provider.clusters.{cluster}", paths[cluster]
 
 
-def test_the_other_allocator_is_rendered_below_this_ones_provider():
-    """A known wrong picture, pinned so it cannot change unnoticed.
+def test_a_peer_allocators_agents_have_no_route():
+    """Reachable to ask about, not addressable to instruct.
 
-    Not for want of information: the health report carries `agent_type`, and
-    `hpcportal` reports `portal` (checked against a live stack, as is the rest
-    of this). opdata reads it too — it is what `node["type"]` is built from, and
-    what the graph draws the portal icon from. `walk()` simply does not consult
-    it when building paths, so hpcportal is reached through waldur's provider
-    and handed `waldur.provider.hpcportal` — a path that reads as a downstream
-    agent of waldur's and is not a route an instruction can use. Also verified
-    live: `diagnostics()` on that path *works*, so the node opens in the
-    inspector and looks legitimate, while an instruction sent to it never lands.
+    Two different questions that look like one. Diagnostics is routed hop by
+    hop across the peer graph, so the traversal path reaches the other
+    allocator and `id` keeps it — the inspector works, which is worth having on
+    a shared estate. An *instruction* is addressed <portal>.<agent>... rooted
+    at the portal that owns the agent, and there is no such route from here, so
+    `route` is None rather than a destination that would silently never land.
 
-    If opdata ever learns to re-root or mark peer portals, this is the test
-    that should change.
+    Checked live too, both halves: see test_live.py.
     """
     _, nodes = peer_graph("multi-allocator")
     walked, edges = [], []
     opdata.walk(nodes["bridge"], "", 0, walked, edges, set())
-    paths = {n["name"]: n["id"] for n in walked}
+    by_name = {n["name"]: n for n in walked}
 
-    assert paths["hpcportal"] == "waldur.provider.hpcportal"
-    assert paths["bridge2"] == "waldur.provider.hpcportal.bridge2"
+    for name in ("hpcportal", "bridge2"):
+        assert by_name[name]["route"] is None, name
+        assert by_name[name]["allocator"] == "peer", name
+
+    # Still reachable to ask about, and still drawn attached to the shared hop.
+    assert by_name["hpcportal"]["id"] == "waldur.provider.hpcportal"
+    assert ("provider", "hpcportal") in {(e["source"], e["target"]) for e in edges}
+
+
+def test_our_own_agents_keep_a_route_equal_to_their_path():
+    """Marking the peer estate must not disturb the one we can drive.
+
+    Everything the bridge's own portal owns — including the clusters the two
+    allocators share, which we reach through our own portal — keeps a route,
+    and it is the same dotted path the inspector uses.
+    """
+    _, nodes = peer_graph("multi-allocator")
+    walked, edges = [], []
+    opdata.walk(nodes["bridge"], "", 0, walked, edges, set())
+    by_name = {n["name"]: n for n in walked}
+
+    for name in ("bridge", "waldur", "provider", "clusters", "cluster1", "cluster2", "fs1"):
+        node = by_name[name]
+        assert node["route"] == node["id"], name
+        assert node["allocator"] == "own", name
+
+    assert by_name["cluster2"]["route"] == "waldur.provider.clusters.cluster2"
+
+
+@pytest.mark.parametrize("name", TOPOLOGIES)
+def test_a_single_allocator_network_has_no_unroutable_agents(name):
+    """The mark must not fire where there is only one allocator."""
+    agents, nodes = peer_graph(name)
+    walked, edges = [], []
+    opdata.walk(nodes["bridge"], "", 0, walked, edges, set())
+
+    unroutable = {n["name"] for n in walked if n["route"] is None}
+    expected = set() if name == "chain" else {"hpcportal", "bridge2"}
+    assert unroutable == expected, unroutable
 
 
 @pytest.mark.parametrize("name", TOPOLOGIES)

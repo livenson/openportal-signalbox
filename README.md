@@ -189,46 +189,39 @@ it also shows up on its own after the VM's clock jumps. Retrying works; a
 container restart fixes it for good. Worth knowing because a 401 otherwise
 reads as a bad key.
 
-## What signalbox gets wrong on a shared estate
+## Two allocators on one estate
 
-The multi-allocator topology exists because it is the shape signalbox draws
-**incorrectly**, and it is better to be able to reproduce that than to describe
-it. Two allocators sharing a provider is a real deployment; a national service
-sold through more than one allocation route is exactly this picture.
+The multi-allocator topology is the shape that used to be drawn wrong, and it
+is worth understanding because a national service sold through more than one
+allocation route is exactly this picture.
 
-The health report *does* say what that peer is — every agent carries
-`agent_type`, and `hpcportal` reports `portal`. signalbox reads it, and the
-card in the picture below is drawn with the portal icon and badge because of
-it. What `opdata.walk()` does not do is *act* on it: every peer extends the
-path it was reached by, whatever its type. So walking out from one bridge
-reaches the other allocator through the shared provider and hands it a path
-that reads as a downstream agent:
+Reaching the second allocator means going *through* the provider both of them
+share, so a plain walk hands it `waldur.provider.hpcportal` — a path that reads
+as a downstream agent of waldur's. That path is not nothing: diagnostics is
+routed hop by hop across the peer graph, so it genuinely reaches hpcportal and
+the inspector opens on it. What it is not is a destination. Instructions are
+addressed `<portal>.<agent>...` from the portal that *owns* the agent, and
+there is no such route from here — a job sent there is never refused, it simply
+never lands.
 
-```
-waldur.provider.hpcportal            ← the other allocator's portal
-waldur.provider.hpcportal.bridge2    ← and its bridge
-```
+So the two questions are answered separately. Every agent carries:
 
-![two allocators sharing a provider, the second drawn as a subordinate branch](docs/multi-allocator.png)
+- **`id`** — how to ask about it through this bridge. Works for the whole
+  graph, including the other allocator's half.
+- **`route`** — where to send it an instruction, or `null` when there is no
+  route from here. The console only ever offers agents that have one.
 
-Above: `./stack.sh up multi-allocator`. Work flows through both clusters, and
-`hpcportal` with its `bridge2` hangs off `provider` on a dead link at the
-bottom — the second allocator drawn as if it reported to the first.
+![two allocators sharing a provider, the second marked as unaddressable](docs/multi-allocator.png)
 
-Neither is a route an instruction can use, and the fix is not blocked on
-missing information: a portal reached below the root's own portal is another
-allocator, because OpenPortal roots every route at a portal and forbids a
-portal from querying another. The trap is that they are not
-obviously wrong: `diagnostics()` on those paths **works**, so the node opens in
-the inspector and looks legitimate, while an instruction aimed at it never
-lands — it just sits non-terminal until the wait expires. The hierarchy is also
-inverted: the second allocator is drawn below the first one's provider, as if
-subordinate to it.
+Above: `./stack.sh up multi-allocator`. Work flows through both clusters —
+either allocator can allocate onto either — while `hpcportal` and its `bridge2`
+are drawn back, dashed, as another allocator's. Click them and the inspector
+still opens; the console will not aim at them.
 
-Multi-cluster is fine. Two clusters under one platform render correctly, both
-are addressable from either allocator, and the portal name namespaces the local
-group, so `xsend.waldur` and `xsend.hpcportal` do not collide on a shared
-cluster.
+The health report is what makes this possible: every agent reports its
+`agent_type`, and a portal reached below the first hop is by construction
+somebody else's, because OpenPortal roots every route at a portal and forbids a
+portal from querying another.
 
 ## Limitations
 

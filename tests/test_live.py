@@ -362,32 +362,51 @@ def test_an_agent_name_is_not_an_offering_address(writable):
     assert result["ok"] is False, result
 
 
-def test_a_peer_portal_is_typed_even_though_its_path_ignores_that(live_topology):
-    """The health report identifies a second allocator; the path does not use it.
+def test_a_peer_allocator_is_reachable_but_not_addressable(live_topology):
+    """Two different questions, and the live network answers them differently.
 
-    This exists because the opposite was once written down here — that nothing
-    in the report distinguishes another allocator. It does: `agent_type` comes
-    back for every agent and reads `portal`, and opdata already surfaces it as
-    `node["type"]`, which is what the graph draws the portal icon from.
+    The health report carries `agent_type` for every agent and the peer portal
+    reports `portal`, which is what marks its estate. From there:
 
-    What is missing is only that `walk()` does not consult it, so a portal
-    reached below the root's own gets a path extending the agent it was reached
-    through. Both halves are asserted here, so neither can drift: the type is
-    present, and the path is still wrong.
+      - `id` still reaches it. Diagnostics is routed hop by hop across the peer
+        graph, so the traversal path works and the inspector opens — worth
+        having, since a shared cluster's problems are visible from both sides.
+      - `route` is None, because an instruction is addressed from the portal
+        that owns the agent and there is no such route from this bridge.
+
+    Both halves are asserted against real agents, because measuring is what
+    settled the design: re-rooting the path made it honest and unqueryable at
+    the same time.
     """
     portals = [node for node in live_topology["nodes"] if node["type"] == "portal"]
     assert portals, "no portal reported at all"
 
-    # Depth 1 is the root bridge's own portal; anything deeper was reached
-    # through a shared agent, and OpenPortal roots every route at a portal, so
-    # by construction it belongs to someone else.
-    others = [node for node in portals if node["depth"] > 1]
-    if not others:
+    peers = [node for node in live_topology["nodes"] if node["allocator"] == "peer"]
+    if not peers:
         pytest.skip("single-allocator network — nothing to confuse with a peer")
 
-    for node in others:
-        assert node["type"] == "portal", node
-        assert "." in node["id"], (
-            f"{node['name']} now roots its own path — walk() has learned to use "
-            "agent_type, so this test and the docs around it should change"
-        )
+    for node in peers:
+        assert node["route"] is None, node
+        # Reachable: the inspector has to keep working on the shared estate.
+        detail = opdata.agent_detail(node["id"], log_lines=2)
+        assert detail["ok"], (node["id"], detail)
+        assert detail["agent"] == node["name"], detail
+
+
+def test_our_own_agents_are_addressable_at_their_route(live_topology, writable):
+    """A route is not just non-None — it has to actually work.
+
+    Cheapest proof that marking the peer estate did not take anything real with
+    it: address the executing agent by the route the topology reports.
+    """
+    ours = [
+        node
+        for node in live_topology["nodes"]
+        if node["allocator"] == "own" and node["type"] == "instance"
+    ]
+    assert ours, "no instance agent we can drive"
+
+    node = ours[0]
+    assert node["route"] == node["id"]
+    result = opdata.run_command(f"{node['route']} add_project sbxroute.waldur", 90_000)
+    assert result["ok"], result

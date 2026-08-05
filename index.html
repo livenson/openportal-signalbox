@@ -36,6 +36,9 @@
   .agent.warn { border-left-color: var(--warn); }
   .agent.down { border-left-color: var(--bad); }
   .agent.sel  { border-color: #58a6ff; }
+  /* Another allocator's agent: readable, but nothing here can instruct it. */
+  .agent.peer { opacity: .62; border-style: dashed; }
+  .agent .peer-note { font-size: 10px; color: var(--muted); margin-top: 3px; }
   .agent .top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
   .agent .name {
     font-weight: 600; letter-spacing: -0.01em;
@@ -187,6 +190,9 @@ function Icon({ type }) {
     </svg>`;
 }
 
+/* An agent belonging to a peer allocator: still worth reading — a shared
+   cluster's problems show from both sides — but nothing here can instruct it,
+   so it is drawn back rather than offered. */
 function stateOf(n) {
   if (!n.connected) return 'down';
   return (n.totals?.failed ?? 0) > 0 ? 'warn' : 'ok';
@@ -197,12 +203,13 @@ function AgentNode({ data, selected }) {
   const n = data.node;
   const failed = n.totals?.failed ?? 0;
   return html`
-    <div class=${`agent ${stateOf(n)}${selected ? ' sel' : ''}`}>
+    <div class=${`agent ${stateOf(n)}${selected ? ' sel' : ''}${n.route ? '' : ' peer'}`}>
       <${Handle} type="target" position=${Position.Left} />
       <div class="top">
         <span class="name"><${Icon} type=${n.type} />${n.name}</span>
         <span class="chip">${n.type}</span>
       </div>
+      ${!n.route && html`<div class="peer-note">another allocator — readable, not addressable</div>`}
       <div class="metrics">
         <span>run <b>${n.jobs?.running ?? 0}</b></span>
         <span class=${failed ? 'bad' : ''}>fail <b>${failed}</b></span>
@@ -403,19 +410,25 @@ function App() {
   // cluster instance since that is where most instructions are aimed.
   // Everything is derived from the live topology: the portal names itself, and
   // instructions default to the instance agent that executes them.
-  const portal = agents.find((n) => n.type === 'portal')?.name ?? 'portal';
-  const instanceId = agents.find((n) => n.type === 'instance')?.id;
-  const dest = (selected?.id && selected.id !== 'bridge' ? selected.id : instanceId)
-    ?? agents[0]?.id ?? '';
+  //
+  // `route` rather than `id` throughout, and only agents that have one. On an
+  // estate shared with another allocator, its agents are reachable to ask
+  // about but not addressable to instruct — an instruction sent there is never
+  // refused, it just never lands — so they must not be offered as a target.
+  const ours = agents.filter((n) => n.route);
+  const portal = ours.find((n) => n.type === 'portal')?.name ?? 'portal';
+  const instanceId = ours.find((n) => n.type === 'instance')?.route;
+  const selectedRoute = selected?.route && selected.route !== 'bridge' ? selected.route : null;
+  const dest = selectedRoute ?? instanceId ?? ours[0]?.route ?? '';
   // Resolve each preset against an agent that can actually answer it: prefer
   // the selection when its role fits, otherwise fall back to the first agent
   // of the required role. Without this, selecting a router silently produces
   // commands that are guaranteed to fail.
   const roleTarget = useCallback((role) => {
     if (!role) return null;
-    if (selected?.type === role) return selected.id;
-    return agents.find((n) => n.type === role)?.id ?? dest;
-  }, [agents, selected, dest]);
+    if (selected?.type === role && selected.route) return selected.route;
+    return ours.find((n) => n.type === role)?.route ?? dest;
+  }, [ours, selected, dest]);
 
   const build = useCallback((preset, offeringName) => {
     const [, role, tpl] = preset;

@@ -44,13 +44,24 @@ def attr(obj, name, default=None):
     return value
 
 
-def node_of(info, path, depth):
+def node_of(info, path, depth, foreign=False):
     def num(name, default=0):
         value = attr(info, name, default)
         return default if value is None else value
 
     return {
+        # How to *ask about* this agent through the bridge we hold an invite
+        # for. Diagnostics is routed hop by hop across the peer graph, so this
+        # works for every agent the walk reached, including another allocator's.
         "id": path or info.name,
+        # Where to *send an instruction*. Not the same question: an instruction
+        # is addressed <portal>.<agent>..., rooted at the portal that owns the
+        # agent, so there is no route from here to somebody else's estate — the
+        # job would sit non-terminal until the wait expired rather than being
+        # refused. None says so, instead of offering a destination that cannot
+        # work.
+        "route": None if foreign else (path or info.name),
+        "allocator": "peer" if foreign else "own",
         "name": info.name,
         "type": num("agent_type", "unknown"),
         "depth": depth,
@@ -79,24 +90,39 @@ def node_of(info, path, depth):
     }
 
 
-def walk(info, path, depth, nodes, edges, seen):
+def walk(info, path, depth, nodes, edges, seen, foreign=False):
     """Depth-first walk of the peer tree.
 
     Peer links are reciprocal, so a naive walk would recurse forever; `seen`
     keeps each agent at its first (shortest) path, which is also the routable
     destination for diagnostics.
+
+    ``foreign`` marks the part of the graph that belongs to another allocator —
+    reachable to ask about, not addressable to instruct. See ``node_of``.
     """
     if info.name in seen:
         return
     seen.add(info.name)
-    nodes.append(node_of(info, path, depth))
+    nodes.append(node_of(info, path, depth, foreign))
 
     for name, peer in sorted((attr(info, "peers", {}) or {}).items()):
         if name in seen:
             continue
         child_path = name if depth == 0 else f"{path}.{name}"
         edges.append({"source": info.name, "target": name})
-        walk(peer, child_path, depth + 1, nodes, edges, seen)
+        # A portal below the first hop belongs to another allocator: OpenPortal
+        # roots every route at a portal and forbids a portal from querying
+        # another, so one reached *through* a shared agent is somebody else's.
+        # Everything under it is theirs too.
+        walk(
+            peer,
+            child_path,
+            depth + 1,
+            nodes,
+            edges,
+            seen,
+            foreign or (depth >= 1 and attr(peer, "agent_type") == "portal"),
+        )
 
 
 def topology():
