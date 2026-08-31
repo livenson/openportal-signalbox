@@ -43,6 +43,10 @@
     opacity: .72; border-style: dashed; border-left-color: var(--line);
     width: 190px;
   }
+  .edge-zone {
+    fill: var(--muted); font-size: 11px; letter-spacing: .02em;
+    paint-order: stroke; stroke: var(--bg); stroke-width: 4px;
+  }
   .agent.clients .url {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 11px; color: var(--muted); margin-top: 4px; word-break: break-all;
@@ -217,6 +221,7 @@ function AgentNode({ data, selected }) {
   return html`
     <div class=${`agent ${stateOf(n)}${selected ? ' sel' : ''}${n.route ? '' : ' peer'}`}>
       <${Handle} type="target" position=${Position.Left} />
+      <${Handle} type="target" position=${Position.Top} id="up" />
       <div class="top">
         <span class="name"><${Icon} type=${n.type} />${n.name}</span>
         <span class="chip">${n.type}</span>
@@ -229,6 +234,7 @@ function AgentNode({ data, selected }) {
         <span>${(n.job_time_mean_ms ?? 0).toFixed(0)} ms</span>
       </div>
       <${Handle} type="source" position=${Position.Right} />
+      <${Handle} type="source" position=${Position.Bottom} id="down" />
     </div>`;
 }
 
@@ -291,6 +297,19 @@ const nodeTypes = { agent: AgentNode, clients: ClientsNode };
  * Jobs here finish in milliseconds, so a purely live view would almost always
  * be empty; the dots keep running for a few seconds after the work lands.
  */
+/**
+ * A zone is half of an agent's identity - peers are `name@zone`, and every
+ * connect, watchdog, job and diagnostics hop carries it. Between two portals
+ * the convention is `<awarding-portal>><site-portal>`, and it is load-bearing:
+ * offerings are registered as virtual agents in that zone, so the link between
+ * the portals has to be in it or no award ever arrives.
+ */
+const ZONE_HELP =
+  'Peer link between the two portals, from configuration — neither portal will '
+  + 'report the other. The zone names the pair as <awarding portal>><site portal>; '
+  + 'offerings are registered as virtual agents in it, so an award only arrives '
+  + 'while the link carries this exact zone.';
+
 function FlowEdge({ id, sourceX, sourceY, targetX, targetY,
                     sourcePosition, targetPosition, style, data }) {
   const [path] = getBezierPath({
@@ -303,9 +322,10 @@ function FlowEdge({ id, sourceX, sourceY, targetX, targetY,
     <${React.Fragment}>
       <${BaseEdge} id=${id} path=${path} style=${style} />
       ${data?.inferred && html`
-        <text class="edge-count" x=${(sourceX + targetX) / 2}
-              y=${(sourceY + targetY) / 2 - 9} text-anchor="middle">
-          ${data.zone || 'configured link'}<//>`}
+        <text class="edge-zone" x=${(sourceX + targetX) / 2}
+              y=${(sourceY + targetY) / 2} text-anchor="middle">
+          <title>${ZONE_HELP}<//>
+          ${data.zone ? `zone ${data.zone}` : 'configured link'}<//>`}
       ${dots > 0 && html`
         <${React.Fragment}>
           ${Array.from({ length: dots }, (_, i) => html`
@@ -446,6 +466,10 @@ function App() {
         id: `${e.source}->${e.target}`,
         type: 'flow',
         source: byKey.get(e.source)?.key, target: target?.key,
+        // Between bands, so top-to-bottom: a left-to-right bezier would loop
+        // back around and read as traffic flowing the wrong way.
+        sourceHandle: e.inferred ? 'down' : null,
+        targetHandle: e.inferred ? 'up' : null,
         // A configured link carries no traffic of its own to count: neither
         // portal will report the other, which is why it was configured.
         data: { count: e.inferred ? 0 : count, inferred: Boolean(e.inferred), zone: e.zone || '' },

@@ -297,6 +297,16 @@ next to the summary; the other one still draws.
 `SIGNALBOX_INVITES="rp=/a.toml,efp=/b.toml"` does the same without a file, for
 a shell that has no TOML parser to hand.
 
+**What `zone` is.** Half of an agent's identity: peers are `name@zone`
+(`Peer { name, zone }`), and every connect, watchdog, job and diagnostics hop
+carries it — the same agent name can appear in more than one zone and they are
+different peers. A bridge sits in its portal's `default` zone; between two
+portals the convention is `<awarding-portal>><site-portal>`, so `rp>efp` reads
+"awards flow from rp to efp". It is not decoration: `sync_offerings` registers
+each offering as a virtual agent in that zone, so the link between the two
+portal agents has to carry exactly it or no award ever arrives. Put the zone
+from your own wiring in `[[link]]` and the graph will show it on the edge.
+
 **The bridge's other end.** `op-bridge` does not join two sites — it joins the
 agent protocol to everything outside it. Its openportal end peers with its own
 portal and is reported by `health()`; its other end is a signed HTTP endpoint
