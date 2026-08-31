@@ -21,6 +21,19 @@ def write_config(tmp_path, body):
     return str(path)
 
 
+def needs_toml_parser():
+    """Skip only where opdata genuinely cannot read a TOML file.
+
+    ``_load_toml`` takes tomllib (3.11+) or tomli, and on the 3.10 floor pytest
+    already brings tomli - so keying this on the version would drop the
+    coverage exactly where the fallback is the thing worth testing.
+    """
+    try:
+        import tomllib  # noqa: F401
+    except ModuleNotFoundError:
+        pytest.importorskip("tomli", reason="reading a TOML file needs tomllib or tomli")
+
+
 def test_a_lone_invite_is_one_unnamed_deployment(monkeypatch):
     monkeypatch.setattr(opdata, "CONFIG", "")
     monkeypatch.setattr(opdata, "INVITES", "")
@@ -231,7 +244,7 @@ def test_the_bridges_other_end_comes_from_the_invite(two_deployments):
     is the door this tool itself came in through — so it is read from the
     invite we already hold, and kept out of ``nodes``.
     """
-    pytest.importorskip("tomllib", reason="reading the invite's url needs a TOML parser")
+    needs_toml_parser()
     import opdata
 
     data = opdata.topology()
@@ -248,7 +261,7 @@ def test_the_bridges_other_end_comes_from_the_invite(two_deployments):
 def test_an_unreadable_invite_costs_the_endpoint_not_the_graph(two_deployments, monkeypatch):
     """The invite is a credential the client already parsed; we only re-read it
     for its address, so failing to is not worth losing a deployment over."""
-    pytest.importorskip("tomllib", reason="reading the invite's url needs a TOML parser")
+    needs_toml_parser()
     import opdata
 
     _fake, invites = two_deployments
