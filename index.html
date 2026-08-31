@@ -49,6 +49,8 @@
     font-size: 10.5px; color: var(--muted); border: 1px solid var(--line);
     border-radius: 999px; padding: 0 6px;
   }
+  /* Which deployment an agent belongs to, shown only when there is a choice. */
+  .agent .chip.src { border-style: dashed; }
   .agent .metrics {
     display: flex; gap: 12px; margin-top: 7px;
     font-size: 11.5px; color: var(--muted);
@@ -208,6 +210,7 @@ function AgentNode({ data, selected }) {
       <div class="top">
         <span class="name"><${Icon} type=${n.type} />${n.name}</span>
         <span class="chip">${n.type}</span>
+        ${data.showSource && html`<span class="chip src">${n.source}</span>`}
       </div>
       ${!n.route && html`<div class="peer-note">another allocator — readable, not addressable</div>`}
       <div class="metrics">
@@ -267,6 +270,10 @@ function FlowEdge({ id, sourceX, sourceY, targetX, targetY,
   return html`
     <${React.Fragment}>
       <${BaseEdge} id=${id} path=${path} style=${style} />
+      ${data?.inferred && html`
+        <text class="edge-count" x=${(sourceX + targetX) / 2}
+              y=${(sourceY + targetY) / 2 - 9} text-anchor="middle">
+          ${data.zone || 'configured link'}<//>`}
       ${dots > 0 && html`
         <${React.Fragment}>
           ${Array.from({ length: dots }, (_, i) => html`
@@ -316,10 +323,10 @@ function App() {
   const prevCompleted = React.useRef(new Map());
   const recent = React.useRef(new Map());
 
-  const nodesById = React.useMemo(
-    () => new Map(nodes.map((n) => [n.id, n.data.node])), [nodes]);
-  const nodesByName = React.useMemo(
-    () => new Map(nodes.map((n) => [n.data.node.name, n.data.node])), [nodes]);
+  // Two deployments routinely both have an agent called "portal", so every
+  // lookup in the page goes through the server-assigned key.
+  const nodesByKey = React.useMemo(
+    () => new Map(nodes.map((n) => [n.data.node.key, n.data.node])), [nodes]);
 
   const load = useCallback(async () => {
     const res = await fetch('/api/topology');
@@ -330,14 +337,14 @@ function App() {
     const now = Date.now();
     for (const n of data.nodes) {
       const done = n.totals?.completed ?? 0;
-      const before = prevCompleted.current.get(n.name);
+      const before = prevCompleted.current.get(n.key);
       if (before !== undefined && done > before) {
-        recent.current.set(n.name, { count: done - before, at: now });
+        recent.current.set(n.key, { count: done - before, at: now });
       }
-      prevCompleted.current.set(n.name, done);
+      prevCompleted.current.set(n.key, done);
     }
-    for (const [name, hit] of recent.current) {
-      if (now - hit.at > 12000) recent.current.delete(name);
+    for (const [key, hit] of recent.current) {
+      if (now - hit.at > 12000) recent.current.delete(key);
     }
 
     // Work executed on a leaf must have crossed every hop above it, but only
@@ -347,28 +354,33 @@ function App() {
     const parent = new Map(data.edges.map((e) => [e.target, e.source]));
     const carried = new Map();
     for (const n of data.nodes) {
-      const own = (recent.current.get(n.name)?.count ?? 0) + (n.jobs?.running ?? 0);
+      const own = (recent.current.get(n.key)?.count ?? 0) + (n.jobs?.running ?? 0);
       if (!own) continue;
-      for (let at = n.name; at; at = parent.get(at)) {
+      for (let at = n.key; at; at = parent.get(at)) {
         carried.set(at, (carried.get(at) ?? 0) + own);
       }
     }
 
-    const byName = new Map(data.nodes.map((n) => [n.name, n]));
+    const byKey = new Map(data.nodes.map((n) => [n.key, n]));
+    const several = (data.sources || []).length > 1;
     const rfNodes = data.nodes.map((n) => ({
-      id: n.id, type: 'agent', data: { node: n }, position: { x: 0, y: 0 },
+      id: n.key, type: 'agent', data: { node: n, showSource: several },
+      position: { x: 0, y: 0 },
     }));
     const rfEdges = data.edges.map((e) => {
-      const target = byName.get(e.target);
+      const target = byKey.get(e.target);
       const count = carried.get(e.target) ?? 0;
       return {
         id: `${e.source}->${e.target}`,
         type: 'flow',
-        source: byName.get(e.source)?.id, target: target?.id,
-        data: { count },
+        source: byKey.get(e.source)?.key, target: target?.key,
+        // A configured link carries no traffic of its own to count: neither
+        // portal will report the other, which is why it was configured.
+        data: { count: e.inferred ? 0 : count, inferred: Boolean(e.inferred), zone: e.zone || '' },
         style: {
-          stroke: !target?.connected ? '#f85149' : count ? '#1f6feb' : '#30363d',
-          strokeWidth: count ? 2 : 1.5,
+          stroke: e.inferred ? '#8b949e' : !target?.connected ? '#f85149' : count ? '#1f6feb' : '#30363d',
+          strokeWidth: e.inferred ? 1.5 : count ? 2 : 1.5,
+          strokeDasharray: e.inferred ? '5 4' : undefined,
         },
       };
     }).filter((e) => e.source && e.target);
@@ -377,7 +389,9 @@ function App() {
     setEdges(rfEdges);
     const up = data.nodes.filter((n) => n.connected).length;
     const failed = data.nodes.reduce((a, n) => a + (n.totals?.failed ?? 0), 0);
-    setSummary(html`<b>${up}/${data.nodes.length}</b> connected · <b>${failed}</b> failures`);
+    const down = (data.sources || []).filter((src) => !src.ok);
+    setSummary(html`<b>${up}/${data.nodes.length}</b> connected · <b>${failed}</b> failures${
+      down.length ? html` · <span class="bad">${down.map((d) => d.name).join(', ')} unreachable</span>` : ''}`);
   }, []);
 
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
@@ -386,6 +400,12 @@ function App() {
       .catch(() => {});
   }, []);
 
+  const agents = React.useMemo(() => nodes.map((n) => n.data.node), [nodes]);
+  // An instruction is addressed inside one deployment: its destination, its
+  // portal name and the bridge that signs it all have to come from the same
+  // one, or the command is written against agents the bridge cannot reach.
+  const activeSource = selected?.source ?? agents[0]?.source ?? null;
+
   const submit = useCallback(async () => {
     const command = cmd.trim();
     if (!command || busy) return;
@@ -393,7 +413,7 @@ function App() {
     try {
       const res = await fetch('/api/run', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command }),
+        body: JSON.stringify({ command, source: activeSource }),
       });
       const out = await res.json();
       setHistory((h) => [{ command, ...out }, ...h].slice(0, 25));
@@ -403,9 +423,8 @@ function App() {
     } finally {
       setBusy(false);
     }
-  }, [cmd, busy, load]);
+  }, [cmd, busy, load, activeSource]);
 
-  const agents = React.useMemo(() => nodes.map((n) => n.data.node), [nodes]);
   // Presets are written against whichever agent is selected, defaulting to the
   // cluster instance since that is where most instructions are aimed.
   // Everything is derived from the live topology: the portal names itself, and
@@ -415,7 +434,7 @@ function App() {
   // estate shared with another allocator, its agents are reachable to ask
   // about but not addressable to instruct — an instruction sent there is never
   // refused, it just never lands — so they must not be offered as a target.
-  const ours = agents.filter((n) => n.route);
+  const ours = agents.filter((n) => n.route && n.source === activeSource);
   const portal = ours.find((n) => n.type === 'portal')?.name ?? 'portal';
   const instanceId = ours.find((n) => n.type === 'instance')?.route;
   const selectedRoute = selected?.route && selected.route !== 'bridge' ? selected.route : null;
@@ -445,7 +464,7 @@ function App() {
     try {
       const res = await fetch('/api/run', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ offering: 'sbdemo' }),
+        body: JSON.stringify({ offering: 'sbdemo', source: activeSource }),
       });
       const out = await res.json();
       if (out.ok) setOffering('sbdemo');
@@ -456,7 +475,7 @@ function App() {
       }, ...h].slice(0, 25));
       return out.ok ? 'sbdemo' : null;
     } finally { setBusy(false); }
-  }, []);
+  }, [activeSource]);
 
   // A preset must never hand back a command that cannot run, so one that needs
   // a virtual offering agent registers it on the spot rather than leaving a
@@ -484,7 +503,7 @@ function App() {
   // for less and keeps long buffers readable.
   const loadDetail = useCallback(async (node, lvl, needle) => {
     if (!node) return;
-    const params = new URLSearchParams({ path: node.id });
+    const params = new URLSearchParams({ path: node.id, source: node.source || '' });
     if (lvl) params.set('level', lvl);
     if (needle) params.set('q', needle);
     const res = await fetch(`/api/agent?${params}`);
@@ -498,9 +517,8 @@ function App() {
    * one link, which is otherwise spread across two containers.
    */
   const onEdgeClick = useCallback(async (_evt, edge) => {
-    const src = nodesByName.get(edge.source.split('.').pop() || edge.source)
-             ?? nodesById.get(edge.source);
-    const dst = nodesById.get(edge.target);
+    const src = nodesByKey.get(edge.source);
+    const dst = nodesByKey.get(edge.target);
     if (!src || !dst) return;
 
     setSelected(null);
@@ -508,7 +526,9 @@ function App() {
     setLinkLog(null);
 
     const ask = async (node, peerName) => {
-      const params = new URLSearchParams({ path: node.id, q: peerName });
+      const params = new URLSearchParams({
+        path: node.id, q: peerName, source: node.source || '',
+      });
       const res = await fetch(`/api/agent?${params}`);
       const data = await res.json();
       return (data.logs || []).map((l) => ({ ...l, from: node.name }));
@@ -517,7 +537,7 @@ function App() {
     setLinkLog([...a, ...b].sort((x, y) => x.sort - y.sort).slice(-60));
     // Depends on the lookups: with an empty list the handler would close over
     // the first render's empty maps and never resolve either endpoint.
-  }, [nodesById, nodesByName]);
+  }, [nodesByKey]);
 
   const onNodeClick = useCallback(async (_evt, node) => {
     setLink(null);

@@ -34,8 +34,9 @@ The default suite needs no OpenPortal network — it fakes the module (see
 Testing). `live.sh`, `tui.sh` and `run.sh` need a real one, which `stack.sh`
 will build.
 
-Environment read by the code: `OPENPORTAL_BRIDGE_INVITE`, `SIGNALBOX_READONLY`,
-`PORT`, `CACHE_TTL`, `SIGNALBOX_LIVE`.
+Environment read by the code: `OPENPORTAL_BRIDGE_INVITE`, `SIGNALBOX_CONFIG`,
+`SIGNALBOX_INVITES`, `SIGNALBOX_PYTHON`, `SIGNALBOX_READONLY`, `PORT`,
+`CACHE_TTL`, `SIGNALBOX_LIVE`.
 
 ## The version pin
 
@@ -61,12 +62,21 @@ in `tests/conftest.py`, then `./stack.sh down && ./stack.sh up && ./live.sh` —
 `test_agents_report_the_version_the_launchers_installed` is what notices a
 stale image.
 
-## Why the launchers use Docker
+## Docker by default, native when you hold the invite
 
-`op-bridge` listens only inside the agent network, and every call to it is
-signed with the HMAC key from the invite file. So the tools cannot run on the
-host: `run.sh`, `tui.sh` and `live.sh` start a container *on that network* with
-the invite volume mounted. `detect.sh` finds both by locating a running
+`op-bridge` in a Compose deployment listens only inside the agent network, and
+every call to it is signed with the HMAC key from the invite file. So the tools
+cannot run on the host there: `run.sh`, `tui.sh` and `live.sh` start a
+container *on that network* with the invite volume mounted.
+
+That reasoning is about the network, not about Docker. When the agents run
+natively the bridge is reachable from the host and the invite is a path here,
+so `resolve_native()` in `detect.sh` runs ahead of container discovery: an
+invite that exists (via `SIGNALBOX_CONFIG`, `SIGNALBOX_INVITES` or
+`OPENPORTAL_BRIDGE_INVITE`) sets `NATIVE=1` and the launcher runs the Python
+directly, in `SIGNALBOX_PYTHON` if given, else a `.venv-signalbox` filled from
+the same single version pin. No invite means today's Docker path, unchanged —
+which is why the auto-detect is by invite and not by a flag nobody would pass. `detect.sh` finds both by locating a running
 container labelled `com.docker.compose.service=op-bridge` and taking the invite
 volume *from that same container's mounts* — resolving the two independently
 pairs one stack's network with another's key when more than one is up, which
@@ -77,6 +87,25 @@ therefore held to those two names by `tests/test_stack.py`.
 Consequence when editing: the Python files are bind-mounted read-only into the
 container, so an edit needs `docker restart signalbox` (graph view) or a
 relaunch (TUI) — not a rebuild.
+
+## One client, one bridge at a time
+
+The Python client keeps its bridge configuration in a process-global
+(`python/src/lib.rs`: `static SINGLETON_CONFIG: Lazy<RwLock<Option<BridgeConfig>>>`);
+`load_config()` overwrites it. One process therefore addresses one deployment
+at a time, while `server.py` is a `ThreadingHTTPServer`. So **every** bridge
+call in `opdata.py` goes through `use(source)`, which takes `_BRIDGE_LOCK`,
+switches the singleton if needed, and holds the lock across the call. Making a
+call outside that context manager is the bug this design exists to prevent: a
+second thread switches the config underneath the first, which then reads
+another deployment's estate under this one's name, silently.
+
+Consequences worth knowing before "optimising" it: deployments are polled in
+sequence, not in parallel; and node identity has to be qualified, because two
+deployments routinely both have an agent named `portal`. `walk()` stays
+name-keyed per tree (it is protocol truth, and tests call it directly);
+`source_topology()` adds `source` and `key`, and maps the edges onto keys, so
+the front ends never see a bare name.
 
 ## The test stack
 

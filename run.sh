@@ -13,9 +13,17 @@ set -euo pipefail
 
 # shellcheck source=detect.sh
 . "$(cd "$(dirname "$0")" && pwd)/detect.sh"
-resolve_target
 PORT="${PORT:-8900}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+
+if resolve_native; then
+    PYTHON="$(native_python "$HERE")"
+    echo "signalbox on http://localhost:${PORT} (ctrl-c to stop)"
+    exec env PORT="$PORT" SIGNALBOX_READONLY="${SIGNALBOX_READONLY:-}" \
+        "$PYTHON" "$HERE/server.py"
+fi
+
+resolve_target
 
 echo "signalbox on http://localhost:${PORT} (ctrl-c to stop)"
 
@@ -34,5 +42,5 @@ exec docker run --rm $TTY_FLAGS \
     -e SIGNALBOX_READONLY="${SIGNALBOX_READONLY:-}" \
     -v "${INVITE_VOLUME}:/inv:ro" \
     -v "${HERE}:/app:ro" \
-    python:3.10-slim \
+    python:3.12-slim \
     sh -c "pip install --quiet --disable-pip-version-check openportal==${OPENPORTAL_VERSION} && python /app/server.py"

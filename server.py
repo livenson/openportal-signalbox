@@ -11,7 +11,8 @@ Read-only: it exposes health and diagnostics, and never submits a job.
     GET /                 the viewer
     GET /api/topology     agent tree -> nodes + edges
     GET /api/agent?path=  diagnostics for one agent ("" = the bridge itself),
-                          narrowed by optional &level= and &q=
+                          narrowed by optional &level= and &q=, in the
+                          deployment named by optional &source=
     GET /api/config       what this instance allows
     POST /api/run         submit an instruction (disabled by SIGNALBOX_READONLY)
 """
@@ -26,13 +27,21 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from opdata import READONLY, agent_detail, bridge, run_command, sync_offering, topology
+from opdata import (
+    READONLY,
+    agent_detail,
+    bridge,
+    run_command,
+    sources,
+    sync_offering,
+    topology,
+    version_mismatch,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("signalbox")
 
 HERE = Path(__file__).parent
-INVITE = os.getenv("OPENPORTAL_BRIDGE_INVITE", "/inv/bridge-invite.toml")
 PORT = int(os.getenv("PORT", "8900"))
 
 # Diagnostics are fetched per agent on demand and cached briefly, so that
@@ -87,16 +96,29 @@ class Handler(SimpleHTTPRequestHandler):
             path = (query.get("path") or [""])[0]
             level = (query.get("level") or [""])[0] or None
             search = (query.get("q") or [""])[0] or None
-            key = f"agent:{path}:{level}:{search}"
+            # Two deployments routinely both have an agent called "portal", so
+            # the source belongs in the cache key as much as in the call.
+            source = (query.get("source") or [""])[0] or None
+            key = f"agent:{source}:{path}:{level}:{search}"
             try:
-                self._json(cached(key, lambda: agent_detail(path, level=level, search=search)))
+                self._json(
+                    cached(
+                        key,
+                        lambda: agent_detail(path, level=level, search=search, source=source),
+                    )
+                )
             except Exception as exc:
                 logger.warning("diagnostics for %r failed: %s", path, exc)
                 self._json({"ok": False, "error": str(exc)}, 200)
             return
 
         if parsed.path == "/api/config":
-            self._json({"readonly": READONLY})
+            self._json(
+                {
+                    "readonly": READONLY,
+                    "sources": [{"name": src.name, "label": src.display()} for src in sources()],
+                }
+            )
             return
 
         if parsed.path == "/":
@@ -115,26 +137,33 @@ class Handler(SimpleHTTPRequestHandler):
             self._json({"ok": False, "error": "invalid JSON"})
             return
 
+        source = payload.get("source") or None
+
         if payload.get("offering"):
-            self._json(sync_offering(payload["offering"]))
+            self._json(sync_offering(payload["offering"], source=source))
             return
 
         command = payload.get("command", "")
         logger.info("run: %s", command)
         try:
-            self._json(run_command(command, payload.get("timeout_ms", 30000)))
+            self._json(run_command(command, payload.get("timeout_ms", 30000), source=source))
         except Exception as exc:
             logger.warning("run failed: %s", exc)
             self._json({"ok": False, "error": str(exc)})
 
 
 def main():
-    try:
-        bridge()
-        logger.info("Loaded bridge invite from %s", INVITE)
-    except Exception as exc:
-        logger.error("Could not load the bridge invite: %s", exc)
-        sys.exit(1)
+    # Fail at startup, naming the deployment, rather than on the first click.
+    for src in sources():
+        try:
+            bridge(src)
+            logger.info("Loaded bridge invite for %s from %s", src.name, src.invite)
+            mismatch = version_mismatch(src)
+            if mismatch:
+                logger.warning("%s: %s", src.name, mismatch)
+        except Exception as exc:
+            logger.error("Could not load the bridge invite %s: %s", src.invite, exc)
+            sys.exit(1)
 
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     logger.info("OpenPortal viewer on http://localhost:%s", PORT)

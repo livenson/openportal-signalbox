@@ -16,7 +16,9 @@ Two front ends over one shared data layer (`opdata.py`):
 | `./tui.sh` | **Terminal UI** — for actually watching a system |
 | `./run.sh` | **Graph view** — the shape of the network, live traffic, per-link history, and a console |
 
-Both find the running bridge by themselves; you only need Docker.
+Both find the running bridge by themselves. With a Docker Compose
+deployment you need nothing but Docker; agents running natively on the
+host are watched too — see [Native deployment](#native-deployment).
 
 ```bash
 git clone https://github.com/livenson/openportal-signalbox
@@ -230,6 +232,81 @@ The health report is what makes this possible: every agent reports its
 somebody else's, because OpenPortal roots every route at a portal and forbids a
 portal from querying another.
 
+## Native deployment
+
+Not every network runs under Compose. When the agents are processes on the
+host there is no container to discover, so point the launchers at the bridge
+invite instead and they run the tool here rather than in a container:
+
+```bash
+OPENPORTAL_BRIDGE_INVITE=/path/to/bridge-invite.toml ./run.sh
+```
+
+That is the whole switch — an invite that exists means native mode, no invite
+means Docker discovery, exactly as before. The launcher builds a
+`.venv-signalbox` beside the scripts and installs the pinned client into it.
+If you already have an interpreter with a matching `openportal` (the portal's
+own virtualenv, usually), hand it over and nothing is installed:
+
+```bash
+SIGNALBOX_PYTHON=/srv/portal/.venv/bin/python ./tui.sh
+```
+
+The pin matters here in a way it does not under Docker, where one version
+drives both halves of the stack. A native deployment may be running a
+different release, and from 0.91.0 the client signs the V2 canonical string
+while an older bridge verifies the V1 one — so a mismatch surfaces as an
+authentication failure rather than a version error. signalbox compares the two
+after connecting and says so:
+
+```text
+WARNING rp: client 0.93.0 against a bridge reporting 0.91.0
+```
+
+## Several deployments in one graph
+
+A review portal and a site portal are two deployments, two bridges, two
+invites — and one picture worth having, since the interesting failures are
+between them. List them in a config file:
+
+```toml
+# signalbox.toml, beside the scripts (or point SIGNALBOX_CONFIG at it)
+[[deployment]]
+name = "rp"
+invite = "/path/to/rp-invite.toml"
+label = "Review portal"
+
+[[deployment]]
+name = "efp"
+invite = "/path/to/efp-invite.toml"
+label = "Site portal"
+
+[[link]]
+from = "rp"
+to = "efp"
+zone = "rp>efp"
+```
+
+Every agent is then tagged with the deployment it belongs to, and addressed by
+a qualified key — two portals both having an agent called `portal` is the
+normal case, not an edge case. Diagnostics, the log timeline and the console
+all follow the selected agent's deployment, so an instruction is never written
+against agents its bridge cannot reach. A deployment that is down is reported
+next to the summary; the other one still draws.
+
+`SIGNALBOX_INVITES="rp=/a.toml,efp=/b.toml"` does the same without a file, for
+a shell that has no TOML parser to hand.
+
+**Why the link is configured rather than discovered.** It is not an omission:
+OpenPortal refuses portal-to-portal health and diagnostics *on purpose*. The
+responder ignores a health check whose sender is a portal — `handler.rs`,
+"prevent information leakage between sites" — and the requester strips portal
+peers out of the cascade before asking (`health.rs::collect_health_inner`). So
+neither portal will ever report the other, no matter which bridge you ask. An
+operator holding both invites already knows the link exists; `[[link]]` is
+where they say so, and it is drawn dashed and unlabelled by traffic to keep
+the distinction visible.
+
 ## Limitations
 
 - **Logs are recent-only.** Each agent keeps an in-memory ring buffer that dies
@@ -241,6 +318,9 @@ portal from querying another.
   network, not read-only access, whatever these tools choose to call. Keep it
   to development stacks.
 - **Polling, not streaming.** Five-second refresh; the bridge does not push.
+- **One bridge at a time, in sequence.** The client keeps its configuration in
+  a process-global, so several deployments are polled one after another behind
+  a lock rather than in parallel. Fine for a handful; not a fleet view.
 - Traffic counts are per refresh interval, not a per-job trace. A job that
   starts and finishes between two polls is counted, but never seen moving.
 - The graph view loads React Flow and dagre from a CDN, so it needs network
