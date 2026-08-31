@@ -290,7 +290,8 @@ function FlowEdge({ id, sourceX, sourceY, targetX, targetY,
 const edgeTypes = { flow: FlowEdge };
 
 /** Dagre gives a deterministic layered layout that matches the hop chain. */
-function layout(nodes, edges) {
+/** One deployment's own agents, ranked by its own peer links. */
+function layoutOne(nodes, edges) {
   const g = new dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
   g.setGraph({ rankdir: 'LR', nodesep: 26, ranksep: 70 });
   nodes.forEach((n) => g.setNode(n.id, { width: NODE_W, height: NODE_H }));
@@ -300,6 +301,43 @@ function layout(nodes, edges) {
     const p = g.node(n.id);
     return { ...n, position: { x: p.x - NODE_W / 2, y: p.y - NODE_H / 2 } };
   });
+}
+
+const BAND_GAP = 90;
+
+/**
+ * Each deployment is laid out alone, then the bands are stacked.
+ *
+ * A configured link must not rank anything: it joins two portals that are each
+ * the far end of their own estate, so feeding it to dagre pushes the second
+ * deployment a rank to the right and drags its bridge — which peers with
+ * nothing but its own portal — into a rank of its own. The two estates are
+ * mirror images and should be drawn as such.
+ */
+function layout(nodes, edges) {
+  const own = edges.filter((e) => !e.data?.inferred);
+  const bands = [];
+  for (const node of nodes) {
+    const name = node.data.node.source ?? '';
+    let band = bands.find((b) => b.name === name);
+    if (!band) bands.push((band = { name, nodes: [] }));
+    band.nodes.push(node);
+  }
+
+  const placed = [];
+  let offset = 0;
+  for (const band of bands) {
+    const ids = new Set(band.nodes.map((n) => n.id));
+    const inside = own.filter((e) => ids.has(e.source) && ids.has(e.target));
+    const laid = layoutOne(band.nodes, inside);
+    const top = Math.min(...laid.map((n) => n.position.y));
+    const bottom = Math.max(...laid.map((n) => n.position.y + NODE_H));
+    for (const n of laid) {
+      placed.push({ ...n, position: { x: n.position.x, y: n.position.y - top + offset } });
+    }
+    offset += bottom - top + BAND_GAP;
+  }
+  return placed;
 }
 
 function App() {
