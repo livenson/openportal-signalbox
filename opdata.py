@@ -569,6 +569,21 @@ def merged_logs(paths, level=None, search=None, per_agent=120, include_self=Fals
     return rows
 
 
+def offerings(source=None):
+    """Offerings this portal has registered, as agent destinations.
+
+    A read: ``get_offerings`` is a plain GET through the bridge. Worth having
+    beside a portal-to-portal link, because an offering is registered as a
+    *virtual agent* in the pair's zone, and an award only arrives if it is
+    there — so this is the payload the zone exists to carry.
+    """
+    try:
+        with use(source) as op:
+            return sorted(str(x) for x in op.get_offerings())
+    except Exception:
+        return []
+
+
 # --- write path ---------------------------------------------------------
 #
 # Everything above only reads. Submitting an instruction is the one thing here

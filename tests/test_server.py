@@ -196,3 +196,23 @@ def test_posting_anywhere_else_is_404(client):
     call, _ = client
     status, _body = call("/api/nope", {"command": "x"})
     assert status == 404
+
+
+def test_offerings_are_read_per_deployment(client, monkeypatch):
+    """What the zone on a portal link exists to carry.
+
+    An offering is registered as a virtual agent in the pair's zone, so an
+    award only arrives while that registration stands — which makes the list
+    the useful thing to show beside the link, and it is per portal.
+    """
+    call, server = client
+    seen = []
+    monkeypatch.setattr(
+        server, "offerings", lambda source=None: seen.append(source) or [f"demo.{source}"]
+    )
+    status, body = call("/api/offerings?source=efp")
+    assert status == 200
+    assert body == ["demo.efp"]
+    call("/api/offerings?source=rp")
+    call("/api/offerings?source=efp")  # served from cache
+    assert seen == ["efp", "rp"]

@@ -47,6 +47,11 @@
     fill: var(--muted); font-size: 11px; letter-spacing: .02em;
     paint-order: stroke; stroke: var(--bg); stroke-width: 4px;
   }
+  .muted { color: var(--muted); }
+  .warn-note {
+    margin: 8px 0 0; padding: 7px 9px; border-radius: 6px;
+    border: 1px solid #6b4b16; background: #241a08; color: #e3b341; font-size: 11.5px;
+  }
   .agent.clients .url {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 11px; color: var(--muted); margin-top: 4px; word-break: break-all;
@@ -410,6 +415,10 @@ function App() {
   const [offering, setOffering] = useState('');
   const [link, setLink] = useState(null);      // {source, target, count}
   const [linkLog, setLinkLog] = useState(null);
+  // Whether each end actually logs the configured zone, which is the one thing
+  // health cannot answer for a portal pair.
+  const [zoneSeen, setZoneSeen] = useState(null);
+  const [linkOfferings, setLinkOfferings] = useState(null);
   // completed-count per agent from the previous poll, plus a short-lived
   // record of recent traffic so a burst stays visible after it finishes.
   const prevCompleted = React.useRef(new Map());
@@ -629,16 +638,23 @@ function App() {
    * one link, which is otherwise spread across two containers.
    */
   const onEdgeClick = useCallback(async (_evt, edge) => {
-    // Both ends have to be agents with a log to read; a client edge has one
-    // end that is us, and a configured link has no traffic either portal saw.
-    if (edge.data?.client || edge.data?.inferred) return;
+    // Both ends have to be agents with a log to read. A client edge has one
+    // end that is us; a configured link is the most interesting one to open,
+    // because its two ends sit in different estates behind different invites,
+    // and this is the only place their logs can be put side by side.
+    if (edge.data?.client) return;
     const src = nodesByKey.get(edge.source);
     const dst = nodesByKey.get(edge.target);
     if (!src || !dst) return;
 
     setSelected(null);
-    setLink({ source: src, target: dst, count: edge.data?.count ?? 0 });
+    setLink({
+      source: src, target: dst, count: edge.data?.count ?? 0,
+      inferred: Boolean(edge.data?.inferred), zone: edge.data?.zone || '',
+    });
     setLinkLog(null);
+    setZoneSeen(null);
+    setLinkOfferings(null);
 
     const ask = async (node, peerName) => {
       const params = new URLSearchParams({
@@ -650,6 +666,22 @@ function App() {
     };
     const [a, b] = await Promise.all([ask(src, dst.name), ask(dst, src.name)]);
     setLinkLog([...a, ...b].sort((x, y) => x.sort - y.sort).slice(-60));
+    if (edge.data?.inferred) {
+      // What the zone exists to carry: an offering is registered as a virtual
+      // agent in it, and an award only arrives while that registration stands.
+      const ours = await Promise.all([src, dst].map(async (n) => {
+        const res = await fetch(`/api/offerings?source=${encodeURIComponent(n.source)}`);
+        return [n.source, await res.json()];
+      }));
+      setLinkOfferings(Object.fromEntries(ours));
+    }
+    if (edge.data?.inferred && edge.data?.zone) {
+      const zone = edge.data.zone;
+      const [za, zb] = await Promise.all([ask(src, zone), ask(dst, zone)]);
+      setZoneSeen({ zone, [src.source]: za.length, [dst.source]: zb.length });
+    } else {
+      setZoneSeen(null);
+    }
     // Depends on the lookups: with an empty list the handler would close over
     // the first render's empty maps and never resolve either endpoint.
   }, [nodesByKey]);
@@ -730,13 +762,43 @@ function App() {
         ${link && html`
           <${React.Fragment}>
             <h2>${link.source.name} <span class="arrow">⇄</span> ${link.target.name}</h2>
-            <div class="path">peer connection · ${link.target.connected ? 'connected' : 'DISCONNECTED'}</div>
+            <div class="path">
+              ${link.inferred ? `configured peer link · zone ${link.zone || '(none)'}` : 'peer connection'}
+              · ${link.target.connected ? 'connected' : 'DISCONNECTED'}
+            </div>
+            ${link.inferred && html`<div class="hint">${ZONE_HELP}</div>`}
             <div class="kv">
-              <span>carried</span><span>${link.count} job(s) since last refresh</span>
+              ${!link.inferred && html`
+                <span>carried</span><span>${link.count} job(s) since last refresh</span>`}
               <span>${link.source.name}</span><span>${link.source.engine} ${link.source.version}</span>
               <span>${link.target.name}</span><span>${link.target.engine} ${link.target.version}</span>
+              ${link.inferred && zoneSeen && html`
+                <span>zone in ${link.source.source} log</span>
+                <span class=${zoneSeen[link.source.source] ? '' : 'bad'}>
+                  ${zoneSeen[link.source.source] || 'never mentioned'}</span>
+                <span>zone in ${link.target.source} log</span>
+                <span class=${zoneSeen[link.target.source] ? '' : 'bad'}>
+                  ${zoneSeen[link.target.source] || 'never mentioned'}</span>`}
             </div>
-            <h3>connection log (both ends)</h3>
+            ${link.source.version !== link.target.version && html`
+              <div class="warn-note">
+                version skew: ${link.source.name} runs ${link.source.version},
+                ${link.target.name} runs ${link.target.version} — from 0.91.0 the
+                canonical signing string changed, so a mismatched pair fails as an
+                authentication error rather than as a version error
+              </div>`}
+            ${link.inferred && html`
+              <h3>offerings registered</h3>
+              ${linkOfferings === null
+                ? html`<div class="none">loading…</div>`
+                : [link.source, link.target].map((end) => html`
+                    <div class="kv" key=${end.source}>
+                      <span>${end.source}</span>
+                      <span>${(linkOfferings[end.source] || []).length
+                        ? linkOfferings[end.source].join(', ')
+                        : html`<span class="muted">none — nothing can be awarded here</span>`}</span>
+                    </div>`)}`}
+            <h3>connection log (both ends${link.inferred ? ', one per site' : ''})</h3>
             ${linkLog === null
               ? html`<div class="none">loading…</div>`
               : linkLog.length

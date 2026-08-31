@@ -307,6 +307,14 @@ each offering as a virtual agent in that zone, so the link between the two
 portal agents has to carry exactly it or no award ever arrives. Put the zone
 from your own wiring in `[[link]]` and the graph will show it on the edge.
 
+**Clicking the link** opens what neither portal can show you alone: both ends'
+logs about each other in one timeline, each fetched through its own bridge;
+the offerings each portal has registered, since an offering is a virtual agent
+in that zone and an award only arrives while the registration stands; whether
+each end's log mentions the zone at all, which is how a mis-zoned link shows
+itself; and the two engine versions side by side, because cross-site skew is
+the failure that presents as an authentication error rather than a version one.
+
 **The bridge's other end.** `op-bridge` does not join two sites — it joins the
 agent protocol to everything outside it. Its openportal end peers with its own
 portal and is reported by `health()`; its other end is a signed HTTP endpoint

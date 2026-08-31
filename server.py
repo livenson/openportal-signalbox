@@ -13,6 +13,7 @@ Read-only: it exposes health and diagnostics, and never submits a job.
     GET /api/agent?path=  diagnostics for one agent ("" = the bridge itself),
                           narrowed by optional &level= and &q=, in the
                           deployment named by optional &source=
+    GET /api/offerings    offerings a portal has registered, by &source=
     GET /api/config       what this instance allows
     POST /api/run         submit an instruction (disabled by SIGNALBOX_READONLY)
 """
@@ -31,6 +32,7 @@ from opdata import (
     READONLY,
     agent_detail,
     bridge,
+    offerings,
     run_command,
     sources,
     sync_offering,
@@ -110,6 +112,11 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 logger.warning("diagnostics for %r failed: %s", path, exc)
                 self._json({"ok": False, "error": str(exc)}, 200)
+            return
+
+        if parsed.path == "/api/offerings":
+            source = (parse_qs(parsed.query).get("source") or [""])[0] or None
+            self._json(cached(f"offerings:{source}", lambda: offerings(source)))
             return
 
         if parsed.path == "/api/config":
