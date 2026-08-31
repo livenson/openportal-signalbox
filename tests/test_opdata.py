@@ -72,7 +72,15 @@ def test_topology_records_depth_per_hop(chain):
 
 
 def test_topology_edges_follow_the_chain(chain):
-    edges = {(e["source"], e["target"]) for e in opdata.topology()["edges"]}
+    """Edges are drawn between node keys, not agent names.
+
+    A name is only unique inside one deployment - two of them both have a
+    ``bridge`` - so the name-to-node mapping the front ends used to do
+    themselves happens here, where the deployment is still known.
+    """
+    data = opdata.topology()
+    name_of = {n["key"]: n["name"] for n in data["nodes"]}
+    edges = {(name_of[e["source"]], name_of[e["target"]]) for e in data["edges"]}
     assert ("bridge", "waldur") in edges
     assert ("waldur", "provider") in edges
     assert ("provider", "cluster") in edges

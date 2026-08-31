@@ -38,6 +38,24 @@
   .agent.sel  { border-color: #58a6ff; }
   /* Another allocator's agent: readable, but nothing here can instruct it. */
   .agent.peer { opacity: .62; border-style: dashed; }
+  /* The one node not reported by health(): read from the invite we hold. */
+  .agent.clients {
+    opacity: .72; border-style: dashed; border-left-color: var(--line);
+    width: 190px;
+  }
+  .edge-zone {
+    fill: var(--muted); font-size: 11px; letter-spacing: .02em;
+    paint-order: stroke; stroke: var(--bg); stroke-width: 4px;
+  }
+  .muted { color: var(--muted); }
+  .warn-note {
+    margin: 8px 0 0; padding: 7px 9px; border-radius: 6px;
+    border: 1px solid #6b4b16; background: #241a08; color: #e3b341; font-size: 11.5px;
+  }
+  .agent.clients .url {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px; color: var(--muted); margin-top: 4px; word-break: break-all;
+  }
   .agent .peer-note { font-size: 10px; color: var(--muted); margin-top: 3px; }
   .agent .top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
   .agent .name {
@@ -49,6 +67,8 @@
     font-size: 10.5px; color: var(--muted); border: 1px solid var(--line);
     border-radius: 999px; padding: 0 6px;
   }
+  /* Which deployment an agent belongs to, shown only when there is a choice. */
+  .agent .chip.src { border-style: dashed; }
   .agent .metrics {
     display: flex; gap: 12px; margin-top: 7px;
     font-size: 11.5px; color: var(--muted);
@@ -177,6 +197,7 @@ const ICONS = {
   filesystem: 'M1.8 4.2h4.1l1.3 1.7h7V12.6a.6.6 0 0 1-.6.6H2.4a.6.6 0 0 1-.6-.6z',
   account:    'M8 8.2a2.6 2.6 0 1 0 0-5.2 2.6 2.6 0 0 0 0 5.2z M2.8 13.6c0-2.6 2.3-4.1 5.2-4.1s5.2 1.5 5.2 4.1',
   scheduler:  'M8 14.2A6.2 6.2 0 1 0 8 1.8a6.2 6.2 0 0 0 0 12.4z M8 4.6V8.2l2.4 1.7',
+  clients:    'M2.2 3.4h11.6v7.2H2.2z M5.2 13.4h5.6 M8 10.6v2.8',
   unknown:    'M8 14.2A6.2 6.2 0 1 0 8 1.8a6.2 6.2 0 0 0 0 12.4z M8 11.4h.01 M6.2 6.3a1.9 1.9 0 1 1 2.4 2c-.5.2-.6.6-.6 1',
 };
 
@@ -205,9 +226,11 @@ function AgentNode({ data, selected }) {
   return html`
     <div class=${`agent ${stateOf(n)}${selected ? ' sel' : ''}${n.route ? '' : ' peer'}`}>
       <${Handle} type="target" position=${Position.Left} />
+      <${Handle} type="target" position=${Position.Top} id="up" />
       <div class="top">
         <span class="name"><${Icon} type=${n.type} />${n.name}</span>
         <span class="chip">${n.type}</span>
+        ${data.showSource && html`<span class="chip src">${n.source}</span>`}
       </div>
       ${!n.route && html`<div class="peer-note">another allocator — readable, not addressable</div>`}
       <div class="metrics">
@@ -216,6 +239,7 @@ function AgentNode({ data, selected }) {
         <span>${(n.job_time_mean_ms ?? 0).toFixed(0)} ms</span>
       </div>
       <${Handle} type="source" position=${Position.Right} />
+      <${Handle} type="source" position=${Position.Bottom} id="down" />
     </div>`;
 }
 
@@ -245,7 +269,29 @@ const PRESETS = [
    'see what an unroutable destination looks like'],
 ];
 
-const nodeTypes = { agent: AgentNode };
+/**
+ * The bridge's other end, which no agent reports.
+ *
+ * A bridge joins the agent protocol to everything outside it: its openportal
+ * end peers with its own portal, and this one is a signed HTTP endpoint that
+ * clients - Waldur, and this tool - call in on. HealthInfo carries no
+ * addresses for any agent, so this comes from the invite instead, and is drawn
+ * as plainly not part of the reported estate.
+ */
+function ClientsNode({ data }) {
+  return html`
+    <div class="agent clients">
+      <div class="top">
+        <span class="name"><${Icon} type="clients" />clients</span>
+        <span class="chip">invite</span>
+      </div>
+      <div class="url">${data.url}</div>
+      <div class="peer-note">you are here — not reported by health</div>
+      <${Handle} type="source" position=${Position.Right} />
+    </div>`;
+}
+
+const nodeTypes = { agent: AgentNode, clients: ClientsNode };
 
 /**
  * Edge that shows work moving through it.
@@ -256,6 +302,19 @@ const nodeTypes = { agent: AgentNode };
  * Jobs here finish in milliseconds, so a purely live view would almost always
  * be empty; the dots keep running for a few seconds after the work lands.
  */
+/**
+ * A zone is half of an agent's identity - peers are `name@zone`, and every
+ * connect, watchdog, job and diagnostics hop carries it. Between two portals
+ * the convention is `<awarding-portal>><site-portal>`, and it is load-bearing:
+ * offerings are registered as virtual agents in that zone, so the link between
+ * the portals has to be in it or no award ever arrives.
+ */
+const ZONE_HELP =
+  'Peer link between the two portals, from configuration — neither portal will '
+  + 'report the other. The zone names the pair as <awarding portal>><site portal>; '
+  + 'offerings are registered as virtual agents in it, so an award only arrives '
+  + 'while the link carries this exact zone.';
+
 function FlowEdge({ id, sourceX, sourceY, targetX, targetY,
                     sourcePosition, targetPosition, style, data }) {
   const [path] = getBezierPath({
@@ -267,6 +326,11 @@ function FlowEdge({ id, sourceX, sourceY, targetX, targetY,
   return html`
     <${React.Fragment}>
       <${BaseEdge} id=${id} path=${path} style=${style} />
+      ${data?.inferred && html`
+        <text class="edge-zone" x=${(sourceX + targetX) / 2}
+              y=${(sourceY + targetY) / 2} text-anchor="middle">
+          <title>${ZONE_HELP}<//>
+          ${data.zone ? `zone ${data.zone}` : 'configured link'}<//>`}
       ${dots > 0 && html`
         <${React.Fragment}>
           ${Array.from({ length: dots }, (_, i) => html`
@@ -283,7 +347,8 @@ function FlowEdge({ id, sourceX, sourceY, targetX, targetY,
 const edgeTypes = { flow: FlowEdge };
 
 /** Dagre gives a deterministic layered layout that matches the hop chain. */
-function layout(nodes, edges) {
+/** One deployment's own agents, ranked by its own peer links. */
+function layoutOne(nodes, edges) {
   const g = new dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
   g.setGraph({ rankdir: 'LR', nodesep: 26, ranksep: 70 });
   nodes.forEach((n) => g.setNode(n.id, { width: NODE_W, height: NODE_H }));
@@ -293,6 +358,45 @@ function layout(nodes, edges) {
     const p = g.node(n.id);
     return { ...n, position: { x: p.x - NODE_W / 2, y: p.y - NODE_H / 2 } };
   });
+}
+
+const BAND_GAP = 90;
+
+/**
+ * Each deployment is laid out alone, then the bands are stacked.
+ *
+ * A configured link must not rank anything: it joins two portals that are each
+ * the far end of their own estate, so feeding it to dagre pushes the second
+ * deployment a rank to the right and drags its bridge — which peers with
+ * nothing but its own portal — into a rank of its own. The two estates are
+ * mirror images and should be drawn as such.
+ */
+function layout(nodes, edges) {
+  // Only a configured cross-deployment link must not rank; a client edge is
+  // inside one band and belongs in its layout, to the left of its bridge.
+  const own = edges.filter((e) => !e.data?.inferred);
+  const bands = [];
+  for (const node of nodes) {
+    const name = node.data.node.source ?? '';
+    let band = bands.find((b) => b.name === name);
+    if (!band) bands.push((band = { name, nodes: [] }));
+    band.nodes.push(node);
+  }
+
+  const placed = [];
+  let offset = 0;
+  for (const band of bands) {
+    const ids = new Set(band.nodes.map((n) => n.id));
+    const inside = own.filter((e) => ids.has(e.source) && ids.has(e.target));
+    const laid = layoutOne(band.nodes, inside);
+    const top = Math.min(...laid.map((n) => n.position.y));
+    const bottom = Math.max(...laid.map((n) => n.position.y + NODE_H));
+    for (const n of laid) {
+      placed.push({ ...n, position: { x: n.position.x, y: n.position.y - top + offset } });
+    }
+    offset += bottom - top + BAND_GAP;
+  }
+  return placed;
 }
 
 function App() {
@@ -311,15 +415,19 @@ function App() {
   const [offering, setOffering] = useState('');
   const [link, setLink] = useState(null);      // {source, target, count}
   const [linkLog, setLinkLog] = useState(null);
+  // Whether each end actually logs the configured zone, which is the one thing
+  // health cannot answer for a portal pair.
+  const [zoneSeen, setZoneSeen] = useState(null);
+  const [linkOfferings, setLinkOfferings] = useState(null);
   // completed-count per agent from the previous poll, plus a short-lived
   // record of recent traffic so a burst stays visible after it finishes.
   const prevCompleted = React.useRef(new Map());
   const recent = React.useRef(new Map());
 
-  const nodesById = React.useMemo(
-    () => new Map(nodes.map((n) => [n.id, n.data.node])), [nodes]);
-  const nodesByName = React.useMemo(
-    () => new Map(nodes.map((n) => [n.data.node.name, n.data.node])), [nodes]);
+  // Two deployments routinely both have an agent called "portal", so every
+  // lookup in the page goes through the server-assigned key.
+  const nodesByKey = React.useMemo(
+    () => new Map(nodes.map((n) => [n.data.node.key, n.data.node])), [nodes]);
 
   const load = useCallback(async () => {
     const res = await fetch('/api/topology');
@@ -330,14 +438,14 @@ function App() {
     const now = Date.now();
     for (const n of data.nodes) {
       const done = n.totals?.completed ?? 0;
-      const before = prevCompleted.current.get(n.name);
+      const before = prevCompleted.current.get(n.key);
       if (before !== undefined && done > before) {
-        recent.current.set(n.name, { count: done - before, at: now });
+        recent.current.set(n.key, { count: done - before, at: now });
       }
-      prevCompleted.current.set(n.name, done);
+      prevCompleted.current.set(n.key, done);
     }
-    for (const [name, hit] of recent.current) {
-      if (now - hit.at > 12000) recent.current.delete(name);
+    for (const [key, hit] of recent.current) {
+      if (now - hit.at > 12000) recent.current.delete(key);
     }
 
     // Work executed on a leaf must have crossed every hop above it, but only
@@ -347,37 +455,64 @@ function App() {
     const parent = new Map(data.edges.map((e) => [e.target, e.source]));
     const carried = new Map();
     for (const n of data.nodes) {
-      const own = (recent.current.get(n.name)?.count ?? 0) + (n.jobs?.running ?? 0);
+      const own = (recent.current.get(n.key)?.count ?? 0) + (n.jobs?.running ?? 0);
       if (!own) continue;
-      for (let at = n.name; at; at = parent.get(at)) {
+      for (let at = n.key; at; at = parent.get(at)) {
         carried.set(at, (carried.get(at) ?? 0) + own);
       }
     }
 
-    const byName = new Map(data.nodes.map((n) => [n.name, n]));
+    const byKey = new Map(data.nodes.map((n) => [n.key, n]));
+    const several = (data.sources || []).length > 1;
     const rfNodes = data.nodes.map((n) => ({
-      id: n.id, type: 'agent', data: { node: n }, position: { x: 0, y: 0 },
+      id: n.key, type: 'agent', data: { node: n, showSource: several },
+      position: { x: 0, y: 0 },
     }));
     const rfEdges = data.edges.map((e) => {
-      const target = byName.get(e.target);
+      const target = byKey.get(e.target);
       const count = carried.get(e.target) ?? 0;
       return {
         id: `${e.source}->${e.target}`,
         type: 'flow',
-        source: byName.get(e.source)?.id, target: target?.id,
-        data: { count },
+        source: byKey.get(e.source)?.key, target: target?.key,
+        // Between bands, so top-to-bottom: a left-to-right bezier would loop
+        // back around and read as traffic flowing the wrong way.
+        sourceHandle: e.inferred ? 'down' : null,
+        targetHandle: e.inferred ? 'up' : null,
+        // A configured link carries no traffic of its own to count: neither
+        // portal will report the other, which is why it was configured.
+        data: { count: e.inferred ? 0 : count, inferred: Boolean(e.inferred), zone: e.zone || '' },
         style: {
-          stroke: !target?.connected ? '#f85149' : count ? '#1f6feb' : '#30363d',
-          strokeWidth: count ? 2 : 1.5,
+          stroke: e.inferred ? '#8b949e' : !target?.connected ? '#f85149' : count ? '#1f6feb' : '#30363d',
+          strokeWidth: e.inferred ? 1.5 : count ? 2 : 1.5,
+          strokeDasharray: e.inferred ? '5 4' : undefined,
         },
       };
     }).filter((e) => e.source && e.target);
+
+    // The bridge's other end. Not an agent, so it is kept out of everything
+    // that walks the estate and only joins the picture here.
+    for (const client of data.clients || []) {
+      rfNodes.push({
+        id: client.key, type: 'clients',
+        data: { url: client.url, node: { source: client.source, key: client.key } },
+        position: { x: 0, y: 0 },
+      });
+      rfEdges.push({
+        id: `${client.key}->${client.bridge}`,
+        type: 'flow', source: client.key, target: client.bridge,
+        data: { count: 0, client: true },
+        style: { stroke: '#30363d', strokeWidth: 1.5, strokeDasharray: '2 3' },
+      });
+    }
 
     setNodes(layout(rfNodes, rfEdges));
     setEdges(rfEdges);
     const up = data.nodes.filter((n) => n.connected).length;
     const failed = data.nodes.reduce((a, n) => a + (n.totals?.failed ?? 0), 0);
-    setSummary(html`<b>${up}/${data.nodes.length}</b> connected · <b>${failed}</b> failures`);
+    const down = (data.sources || []).filter((src) => !src.ok);
+    setSummary(html`<b>${up}/${data.nodes.length}</b> connected · <b>${failed}</b> failures${
+      down.length ? html` · <span class="bad">${down.map((d) => d.name).join(', ')} unreachable</span>` : ''}`);
   }, []);
 
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
@@ -386,6 +521,12 @@ function App() {
       .catch(() => {});
   }, []);
 
+  const agents = React.useMemo(() => nodes.map((n) => n.data.node), [nodes]);
+  // An instruction is addressed inside one deployment: its destination, its
+  // portal name and the bridge that signs it all have to come from the same
+  // one, or the command is written against agents the bridge cannot reach.
+  const activeSource = selected?.source ?? agents[0]?.source ?? null;
+
   const submit = useCallback(async () => {
     const command = cmd.trim();
     if (!command || busy) return;
@@ -393,7 +534,7 @@ function App() {
     try {
       const res = await fetch('/api/run', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command }),
+        body: JSON.stringify({ command, source: activeSource }),
       });
       const out = await res.json();
       setHistory((h) => [{ command, ...out }, ...h].slice(0, 25));
@@ -403,9 +544,8 @@ function App() {
     } finally {
       setBusy(false);
     }
-  }, [cmd, busy, load]);
+  }, [cmd, busy, load, activeSource]);
 
-  const agents = React.useMemo(() => nodes.map((n) => n.data.node), [nodes]);
   // Presets are written against whichever agent is selected, defaulting to the
   // cluster instance since that is where most instructions are aimed.
   // Everything is derived from the live topology: the portal names itself, and
@@ -415,7 +555,7 @@ function App() {
   // estate shared with another allocator, its agents are reachable to ask
   // about but not addressable to instruct — an instruction sent there is never
   // refused, it just never lands — so they must not be offered as a target.
-  const ours = agents.filter((n) => n.route);
+  const ours = agents.filter((n) => n.route && n.source === activeSource);
   const portal = ours.find((n) => n.type === 'portal')?.name ?? 'portal';
   const instanceId = ours.find((n) => n.type === 'instance')?.route;
   const selectedRoute = selected?.route && selected.route !== 'bridge' ? selected.route : null;
@@ -445,7 +585,7 @@ function App() {
     try {
       const res = await fetch('/api/run', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ offering: 'sbdemo' }),
+        body: JSON.stringify({ offering: 'sbdemo', source: activeSource }),
       });
       const out = await res.json();
       if (out.ok) setOffering('sbdemo');
@@ -456,7 +596,7 @@ function App() {
       }, ...h].slice(0, 25));
       return out.ok ? 'sbdemo' : null;
     } finally { setBusy(false); }
-  }, []);
+  }, [activeSource]);
 
   // A preset must never hand back a command that cannot run, so one that needs
   // a virtual offering agent registers it on the spot rather than leaving a
@@ -484,7 +624,7 @@ function App() {
   // for less and keeps long buffers readable.
   const loadDetail = useCallback(async (node, lvl, needle) => {
     if (!node) return;
-    const params = new URLSearchParams({ path: node.id });
+    const params = new URLSearchParams({ path: node.id, source: node.source || '' });
     if (lvl) params.set('level', lvl);
     if (needle) params.set('q', needle);
     const res = await fetch(`/api/agent?${params}`);
@@ -498,28 +638,56 @@ function App() {
    * one link, which is otherwise spread across two containers.
    */
   const onEdgeClick = useCallback(async (_evt, edge) => {
-    const src = nodesByName.get(edge.source.split('.').pop() || edge.source)
-             ?? nodesById.get(edge.source);
-    const dst = nodesById.get(edge.target);
+    // Both ends have to be agents with a log to read. A client edge has one
+    // end that is us; a configured link is the most interesting one to open,
+    // because its two ends sit in different estates behind different invites,
+    // and this is the only place their logs can be put side by side.
+    if (edge.data?.client) return;
+    const src = nodesByKey.get(edge.source);
+    const dst = nodesByKey.get(edge.target);
     if (!src || !dst) return;
 
     setSelected(null);
-    setLink({ source: src, target: dst, count: edge.data?.count ?? 0 });
+    setLink({
+      source: src, target: dst, count: edge.data?.count ?? 0,
+      inferred: Boolean(edge.data?.inferred), zone: edge.data?.zone || '',
+    });
     setLinkLog(null);
+    setZoneSeen(null);
+    setLinkOfferings(null);
 
     const ask = async (node, peerName) => {
-      const params = new URLSearchParams({ path: node.id, q: peerName });
+      const params = new URLSearchParams({
+        path: node.id, q: peerName, source: node.source || '',
+      });
       const res = await fetch(`/api/agent?${params}`);
       const data = await res.json();
       return (data.logs || []).map((l) => ({ ...l, from: node.name }));
     };
     const [a, b] = await Promise.all([ask(src, dst.name), ask(dst, src.name)]);
     setLinkLog([...a, ...b].sort((x, y) => x.sort - y.sort).slice(-60));
+    if (edge.data?.inferred) {
+      // What the zone exists to carry: an offering is registered as a virtual
+      // agent in it, and an award only arrives while that registration stands.
+      const ours = await Promise.all([src, dst].map(async (n) => {
+        const res = await fetch(`/api/offerings?source=${encodeURIComponent(n.source)}`);
+        return [n.source, await res.json()];
+      }));
+      setLinkOfferings(Object.fromEntries(ours));
+    }
+    if (edge.data?.inferred && edge.data?.zone) {
+      const zone = edge.data.zone;
+      const [za, zb] = await Promise.all([ask(src, zone), ask(dst, zone)]);
+      setZoneSeen({ zone, [src.source]: za.length, [dst.source]: zb.length });
+    } else {
+      setZoneSeen(null);
+    }
     // Depends on the lookups: with an empty list the handler would close over
     // the first render's empty maps and never resolve either endpoint.
-  }, [nodesById, nodesByName]);
+  }, [nodesByKey]);
 
   const onNodeClick = useCallback(async (_evt, node) => {
+    if (node.type === 'clients') return;   // no agent, so no diagnostics
     setLink(null);
     setSelected(node.data.node);
     setDetail(null);
@@ -594,13 +762,43 @@ function App() {
         ${link && html`
           <${React.Fragment}>
             <h2>${link.source.name} <span class="arrow">⇄</span> ${link.target.name}</h2>
-            <div class="path">peer connection · ${link.target.connected ? 'connected' : 'DISCONNECTED'}</div>
+            <div class="path">
+              ${link.inferred ? `configured peer link · zone ${link.zone || '(none)'}` : 'peer connection'}
+              · ${link.target.connected ? 'connected' : 'DISCONNECTED'}
+            </div>
+            ${link.inferred && html`<div class="hint">${ZONE_HELP}</div>`}
             <div class="kv">
-              <span>carried</span><span>${link.count} job(s) since last refresh</span>
+              ${!link.inferred && html`
+                <span>carried</span><span>${link.count} job(s) since last refresh</span>`}
               <span>${link.source.name}</span><span>${link.source.engine} ${link.source.version}</span>
               <span>${link.target.name}</span><span>${link.target.engine} ${link.target.version}</span>
+              ${link.inferred && zoneSeen && html`
+                <span>zone in ${link.source.source} log</span>
+                <span class=${zoneSeen[link.source.source] ? '' : 'bad'}>
+                  ${zoneSeen[link.source.source] || 'never mentioned'}</span>
+                <span>zone in ${link.target.source} log</span>
+                <span class=${zoneSeen[link.target.source] ? '' : 'bad'}>
+                  ${zoneSeen[link.target.source] || 'never mentioned'}</span>`}
             </div>
-            <h3>connection log (both ends)</h3>
+            ${link.source.version !== link.target.version && html`
+              <div class="warn-note">
+                version skew: ${link.source.name} runs ${link.source.version},
+                ${link.target.name} runs ${link.target.version} — from 0.91.0 the
+                canonical signing string changed, so a mismatched pair fails as an
+                authentication error rather than as a version error
+              </div>`}
+            ${link.inferred && html`
+              <h3>offerings registered</h3>
+              ${linkOfferings === null
+                ? html`<div class="none">loading…</div>`
+                : [link.source, link.target].map((end) => html`
+                    <div class="kv" key=${end.source}>
+                      <span>${end.source}</span>
+                      <span>${(linkOfferings[end.source] || []).length
+                        ? linkOfferings[end.source].join(', ')
+                        : html`<span class="muted">none — nothing can be awarded here</span>`}</span>
+                    </div>`)}`}
+            <h3>connection log (both ends${link.inferred ? ', one per site' : ''})</h3>
             ${linkLog === null
               ? html`<div class="none">loading…</div>`
               : linkLog.length
