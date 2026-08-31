@@ -7,6 +7,7 @@ of that configuration, the qualification that keeps two estates' agents apart,
 and the serialisation the client's singleton config forces on us.
 """
 
+import pathlib
 import threading
 
 import pytest
@@ -221,3 +222,36 @@ def test_a_developers_own_config_does_not_leak_into_the_suite(fake_openportal):
 
     assert opdata._config_path() is None
     assert [src.name for src in opdata.sources()] == [opdata.DEFAULT_SOURCE_NAME]
+
+
+def test_the_bridges_other_end_comes_from_the_invite(two_deployments):
+    """No agent reports it, so it cannot come from the graph.
+
+    HealthInfo carries no addresses for anyone, and the bridge's HTTP endpoint
+    is the door this tool itself came in through — so it is read from the
+    invite we already hold, and kept out of ``nodes``.
+    """
+    import opdata
+
+    data = opdata.topology()
+    clients = {c["source"]: c for c in data["clients"]}
+    assert set(clients) == {"rp", "efp"}
+    assert clients["rp"]["url"] == "http://127.0.0.1/"
+    assert clients["rp"]["bridge"] == "rp:bridge"
+    assert all(n["type"] != "clients" for n in data["nodes"]), (
+        "a client endpoint is not an agent; everything that walks the estate "
+        "would have to special-case it"
+    )
+
+
+def test_an_unreadable_invite_costs_the_endpoint_not_the_graph(two_deployments, monkeypatch):
+    """The invite is a credential the client already parsed; we only re-read it
+    for its address, so failing to is not worth losing a deployment over."""
+    import opdata
+
+    _fake, invites = two_deployments
+    pathlib.Path(invites["efp"]).write_text("this is not toml {{")
+
+    data = opdata.topology()
+    assert [c["source"] for c in data["clients"]] == ["rp"]
+    assert {n["source"] for n in data["nodes"]} == {"rp", "efp"}

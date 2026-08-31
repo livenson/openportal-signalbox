@@ -297,6 +297,15 @@ next to the summary; the other one still draws.
 `SIGNALBOX_INVITES="rp=/a.toml,efp=/b.toml"` does the same without a file, for
 a shell that has no TOML parser to hand.
 
+**The bridge's other end.** `op-bridge` does not join two sites — it joins the
+agent protocol to everything outside it. Its openportal end peers with its own
+portal and is reported by `health()`; its other end is a signed HTTP endpoint
+that Waldur and this tool call in on, and nothing on the wire mentions it
+(`HealthInfo` carries no addresses for any agent). So it is drawn from the
+invite you already hold, dashed and labelled *you are here*, as the one node
+that is not part of the reported estate. The Waldur side of it — the bridge's
+`signal_url` — stays invisible; it lives only in the bridge's own config.
+
 **Why the link is configured rather than discovered.** It is not an omission:
 OpenPortal refuses portal-to-portal health and diagnostics *on purpose*. The
 responder ignores a health check whose sender is a portal — `handler.rs`,

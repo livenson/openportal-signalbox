@@ -38,6 +38,15 @@
   .agent.sel  { border-color: #58a6ff; }
   /* Another allocator's agent: readable, but nothing here can instruct it. */
   .agent.peer { opacity: .62; border-style: dashed; }
+  /* The one node not reported by health(): read from the invite we hold. */
+  .agent.clients {
+    opacity: .72; border-style: dashed; border-left-color: var(--line);
+    width: 190px;
+  }
+  .agent.clients .url {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px; color: var(--muted); margin-top: 4px; word-break: break-all;
+  }
   .agent .peer-note { font-size: 10px; color: var(--muted); margin-top: 3px; }
   .agent .top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
   .agent .name {
@@ -179,6 +188,7 @@ const ICONS = {
   filesystem: 'M1.8 4.2h4.1l1.3 1.7h7V12.6a.6.6 0 0 1-.6.6H2.4a.6.6 0 0 1-.6-.6z',
   account:    'M8 8.2a2.6 2.6 0 1 0 0-5.2 2.6 2.6 0 0 0 0 5.2z M2.8 13.6c0-2.6 2.3-4.1 5.2-4.1s5.2 1.5 5.2 4.1',
   scheduler:  'M8 14.2A6.2 6.2 0 1 0 8 1.8a6.2 6.2 0 0 0 0 12.4z M8 4.6V8.2l2.4 1.7',
+  clients:    'M2.2 3.4h11.6v7.2H2.2z M5.2 13.4h5.6 M8 10.6v2.8',
   unknown:    'M8 14.2A6.2 6.2 0 1 0 8 1.8a6.2 6.2 0 0 0 0 12.4z M8 11.4h.01 M6.2 6.3a1.9 1.9 0 1 1 2.4 2c-.5.2-.6.6-.6 1',
 };
 
@@ -248,7 +258,29 @@ const PRESETS = [
    'see what an unroutable destination looks like'],
 ];
 
-const nodeTypes = { agent: AgentNode };
+/**
+ * The bridge's other end, which no agent reports.
+ *
+ * A bridge joins the agent protocol to everything outside it: its openportal
+ * end peers with its own portal, and this one is a signed HTTP endpoint that
+ * clients - Waldur, and this tool - call in on. HealthInfo carries no
+ * addresses for any agent, so this comes from the invite instead, and is drawn
+ * as plainly not part of the reported estate.
+ */
+function ClientsNode({ data }) {
+  return html`
+    <div class="agent clients">
+      <div class="top">
+        <span class="name"><${Icon} type="clients" />clients</span>
+        <span class="chip">invite</span>
+      </div>
+      <div class="url">${data.url}</div>
+      <div class="peer-note">you are here — not reported by health</div>
+      <${Handle} type="source" position=${Position.Right} />
+    </div>`;
+}
+
+const nodeTypes = { agent: AgentNode, clients: ClientsNode };
 
 /**
  * Edge that shows work moving through it.
@@ -315,6 +347,8 @@ const BAND_GAP = 90;
  * mirror images and should be drawn as such.
  */
 function layout(nodes, edges) {
+  // Only a configured cross-deployment link must not rank; a client edge is
+  // inside one band and belongs in its layout, to the left of its bridge.
   const own = edges.filter((e) => !e.data?.inferred);
   const bands = [];
   for (const node of nodes) {
@@ -422,6 +456,22 @@ function App() {
         },
       };
     }).filter((e) => e.source && e.target);
+
+    // The bridge's other end. Not an agent, so it is kept out of everything
+    // that walks the estate and only joins the picture here.
+    for (const client of data.clients || []) {
+      rfNodes.push({
+        id: client.key, type: 'clients',
+        data: { url: client.url, node: { source: client.source, key: client.key } },
+        position: { x: 0, y: 0 },
+      });
+      rfEdges.push({
+        id: `${client.key}->${client.bridge}`,
+        type: 'flow', source: client.key, target: client.bridge,
+        data: { count: 0, client: true },
+        style: { stroke: '#30363d', strokeWidth: 1.5, strokeDasharray: '2 3' },
+      });
+    }
 
     setNodes(layout(rfNodes, rfEdges));
     setEdges(rfEdges);
@@ -555,6 +605,9 @@ function App() {
    * one link, which is otherwise spread across two containers.
    */
   const onEdgeClick = useCallback(async (_evt, edge) => {
+    // Both ends have to be agents with a log to read; a client edge has one
+    // end that is us, and a configured link has no traffic either portal saw.
+    if (edge.data?.client || edge.data?.inferred) return;
     const src = nodesByKey.get(edge.source);
     const dst = nodesByKey.get(edge.target);
     if (!src || !dst) return;
@@ -578,6 +631,7 @@ function App() {
   }, [nodesByKey]);
 
   const onNodeClick = useCallback(async (_evt, node) => {
+    if (node.type === 'clients') return;   // no agent, so no diagnostics
     setLink(null);
     setSelected(node.data.node);
     setDetail(null);

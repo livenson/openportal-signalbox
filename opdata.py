@@ -379,6 +379,37 @@ def source_topology(source):
     }
 
 
+def client_endpoint(source):
+    """The bridge's other end: the HTTP door this tool came in through.
+
+    A bridge does not join two sites - it joins the agent protocol to
+    everything outside it. Its openportal end peers with its own portal and is
+    reported by health(); its other end is a signed HTTP endpoint, and nothing
+    on the wire mentions it. HealthInfo carries no addresses for any agent, so
+    this is read from the invite we already hold rather than asked for. The
+    Waldur side of that endpoint (the bridge's signal_url) stays invisible: it
+    lives only in the bridge's own config.
+    """
+    try:
+        return str(_load_toml(source.invite).get("url") or "") or None
+    except Exception:
+        return None
+
+
+def _client_of(nodes, source):
+    """A node for the endpoint behind this deployment's bridge, if it has one."""
+    bridges = [n for n in nodes if n["source"] == source.name and n["type"] == "bridge"]
+    url = client_endpoint(source)
+    if not bridges or not url:
+        return None
+    return {
+        "key": f"{source.name}:clients",
+        "source": source.name,
+        "url": url,
+        "bridge": bridges[0]["key"],
+    }
+
+
 def _portal_key(nodes, source_name, agent_name=""):
     """The end of a configured link: a named agent, else the portal."""
     candidates = [n for n in nodes if n["source"] == source_name]
@@ -396,7 +427,7 @@ def topology():
     raising: watching two portals is most useful exactly when one of them is
     having a bad day.
     """
-    nodes, edges, reported = [], [], []
+    nodes, edges, reported, clients = [], [], [], []
     healthy = True
     for source in sources():
         entry = {"name": source.name, "label": source.display(), "ok": True, "error": ""}
@@ -412,6 +443,12 @@ def topology():
         edges.extend(part["edges"])
         healthy = healthy and part["healthy"]
         reported.append(entry)
+        # Kept out of "nodes", which is what health() reported: everything that
+        # walks the agents - diagnostics, the log timeline, the TUI table -
+        # would otherwise have to special-case a node no agent knows about.
+        client = _client_of(part["nodes"], source)
+        if client:
+            clients.append(client)
 
     for link in links():
         left = _portal_key(nodes, link.source, link.source_agent)
@@ -429,6 +466,7 @@ def topology():
         "healthy": healthy,
         "nodes": nodes,
         "edges": edges,
+        "clients": clients,
         "sources": reported,
     }
 
