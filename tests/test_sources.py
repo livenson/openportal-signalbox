@@ -231,6 +231,7 @@ def test_the_bridges_other_end_comes_from_the_invite(two_deployments):
     is the door this tool itself came in through — so it is read from the
     invite we already hold, and kept out of ``nodes``.
     """
+    pytest.importorskip("tomllib", reason="reading the invite's url needs a TOML parser")
     import opdata
 
     data = opdata.topology()
@@ -247,6 +248,7 @@ def test_the_bridges_other_end_comes_from_the_invite(two_deployments):
 def test_an_unreadable_invite_costs_the_endpoint_not_the_graph(two_deployments, monkeypatch):
     """The invite is a credential the client already parsed; we only re-read it
     for its address, so failing to is not worth losing a deployment over."""
+    pytest.importorskip("tomllib", reason="reading the invite's url needs a TOML parser")
     import opdata
 
     _fake, invites = two_deployments

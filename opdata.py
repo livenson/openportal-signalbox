@@ -390,6 +390,8 @@ def client_endpoint(source):
     Waldur side of that endpoint (the bridge's signal_url) stays invisible: it
     lives only in the bridge's own config.
     """
+    # Any failure costs the endpoint, not the deployment: an unreadable invite,
+    # or a 3.10 without a TOML parser, simply leaves this node off the graph.
     try:
         return str(_load_toml(source.invite).get("url") or "") or None
     except Exception:
