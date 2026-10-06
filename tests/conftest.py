@@ -186,7 +186,7 @@ def fake_openportal(monkeypatch):
     # the previous test's estate.
     monkeypatch.setattr(opdata, "_resolved", None, raising=False)
     monkeypatch.setattr(opdata, "_loaded", None, raising=False)
-    # An operator's own signalbox.toml sits beside the scripts - the README
+    # An operator's own signalbox.toml sits beside the scripts - docs/deployments.md
     # tells them to put it there - and would otherwise resolve as the estate
     # under test. Tests declare their deployments or get the single default.
     monkeypatch.setattr(opdata, "CONFIG", "", raising=False)

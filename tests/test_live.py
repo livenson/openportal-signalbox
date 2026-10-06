@@ -407,7 +407,7 @@ def test_an_agent_name_is_not_an_offering_address(writable):
     """`<portal>.<agent>` is not a route, which is the usual first mistake.
 
     It looks exactly like the offering address that does work, and the error it
-    produces does not say so — hence the note in the README.
+    produces does not say so — hence the note in docs/console.md.
     """
     result = opdata.run_command("waldur.provider get_projects waldur", 20_000)
     assert result["ok"] is False, result

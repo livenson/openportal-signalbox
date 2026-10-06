@@ -9,7 +9,7 @@
 #
 # Topologies live in stack/topologies/. The default, `chain`, is one allocator
 # and one cluster. `multi-allocator` is two of each, sharing a provider, which
-# is where signalbox stops being able to draw the truth — see the README.
+# is where signalbox stops being able to draw the truth — see docs/test-stack.md.
 #
 # Then ./tui.sh or ./run.sh — they discover this stack the same way they
 # discover a real one, by the op-bridge container and the invite volume, so

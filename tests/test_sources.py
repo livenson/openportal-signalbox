@@ -246,7 +246,7 @@ class FakeReportStub:
 
 
 def test_a_developers_own_config_does_not_leak_into_the_suite(fake_openportal):
-    """The README tells operators to drop signalbox.toml beside the scripts.
+    """docs/deployments.md tells operators to drop signalbox.toml beside the scripts.
 
     Resolution is process-wide, so without this the offline suite would run
     against whatever estate that file names — on one machine and not another.
