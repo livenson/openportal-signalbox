@@ -154,6 +154,12 @@
   #console .out .ok { color: var(--ok); }
   #console .out .err { color: var(--bad); }
   #console .out .meta { color: var(--muted); }
+  /* A pending award is waiting on a person, not failing: retry, don't fix. */
+  #console .out .pending { color: var(--warn); }
+  #console .out .kind {
+    font-size: 11px; padding: 0 4px; border: 1px solid var(--line);
+    border-radius: 3px; color: var(--muted);
+  }
   #console .why { color: var(--muted); font-size: 11px; margin-top: 6px; }
 </style>
 </head>
@@ -259,10 +265,16 @@ const PRESETS = [
    'portal id -> local group'],
   ['add_user', 'instance', '{t} add_user alice.sbdemo.{p}',
    'add a user to that project'],
+  ['is_user_added', 'instance', '{t} is_user_added alice.sbdemo.{p}',
+   'did every leaf really add them? — account, filesystem and scheduler must all agree'],
   ['get_usage_report', 'instance', '{t} get_usage_report sbdemo.{p} this_month',
    'usage for a period (needs the project to exist)'],
   ['get_limit', 'instance', '{t} get_limit sbdemo.{p}',
    'current allocation limit'],
+  ['remove_user', 'instance', '{t} remove_user alice.sbdemo.{p}',
+   'take the user out again — fails, naming each leaf that could not'],
+  ['is_user_removed', 'instance', '{t} is_user_removed alice.sbdemo.{p}',
+   'confirm the removal finished on every leaf (the test stack\'s sacct emulator cannot answer this)'],
   ['get_projects', 'portal', '{p}.{o} get_projects {p}',
    'incoming: answered by the portal software itself — registers an offering first'],
   ['bad destination', 'instance', '{t}-nosuch add_project x.{p}',
@@ -751,9 +763,11 @@ function App() {
             ${history.map((h, i) => html`
               <div key=${i}>
                 <span class="cmd">${h.command}</span>
-                <span class=${h.ok ? 'ok' : 'err'}> ${h.state || (h.ok ? 'complete' : 'error')}</span>
+                <span class=${h.ok ? 'ok' : h.error_kind === 'award_pending' ? 'pending' : 'err'}> ${h.state || (h.ok ? 'complete' : 'error')}</span>
+                ${h.error_kind && html`<span class="kind" title=${h.error_class || ''}> ${h.error_kind}</span>`}
                 <span class="meta">${h.elapsed_ms != null ? ` ${h.elapsed_ms}ms` : ''}</span>
                 ${(h.result || h.error) && html`<span class="meta"> — ${(h.result || h.error).slice(0, 200)}</span>`}
+                ${h.ok && h.result_type && html`<span class="meta"> (${h.result_type})</span>`}
               </div>`)}
           </div>`}
       </div>

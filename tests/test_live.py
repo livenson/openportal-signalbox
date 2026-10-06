@@ -328,10 +328,61 @@ def test_an_unroutable_destination_is_not_a_success(writable):
 
 
 def test_an_unknown_project_comes_back_as_an_error(writable, instance):
-    """A refusal arrives as the agent's own message, which is the useful part."""
+    """A refusal arrives as the agent's own message, which is the useful part.
+
+    It comes back as a job in state error, not as an exception from run(), and
+    reading that job's result raises - so the message has to be taken from
+    ``error``. Asserting only that *some* error came back is how losing it went
+    unnoticed.
+    """
     result = opdata.run_command(f"{instance} get_project_mapping neverexisted.waldur", 30_000)
     assert result["ok"] is False, result
-    assert result["error"], result
+    assert result["state"] == "error", result
+    assert "neverexisted" in result["error"], result
+    assert result["error_kind"], result
+    assert result["error_class"].endswith("Error"), result
+
+
+def test_a_user_can_be_verified_in_and_out(project, instance):
+    """is_user_added asks every leaf, not just the one that answered add_user.
+
+    Before 0.93.0 op-cluster reported success for a scheduler step that had
+    failed, so "added" could mean the Slurm account was never made. Against the
+    emulator this is the check that the whole chain really did the work - and
+    a "no" has to come back as false, not as an empty result.
+    """
+    user = f"sbxverify.{project}"
+    before = opdata.run_command(f"{instance} is_user_added {user}", 30_000)
+    assert before["ok"] and before["result"] == "false", before
+    assert before["result_type"] == "bool", before
+
+    assert opdata.run_command(f"{instance} add_user {user}", 90_000)["ok"]
+    added = opdata.run_command(f"{instance} is_user_added {user}", 30_000)
+    assert added["result"] == "true", added
+
+    removed = opdata.run_command(f"{instance} remove_user {user}", 90_000)
+    assert removed["ok"], removed
+    after = opdata.run_command(f"{instance} is_user_added {user}", 30_000)
+    assert after["result"] == "false", after
+
+
+def test_a_removed_user_is_verified_removed(project, instance):
+    """is_user_removed also asks op-slurm whether the user still has jobs.
+
+    It does that with ``sacct --state=PENDING,RUNNING``, which the stack's
+    slurm-emulator does not accept - a gap in the emulator, not in OpenPortal,
+    and exactly the kind of failure the console now shows rather than hides.
+    Marked expected only for that message, so the emulator learning the flag
+    turns this into a pass without anyone editing it.
+    """
+    user = f"sbxgone.{project}"
+    assert opdata.run_command(f"{instance} add_user {user}", 90_000)["ok"]
+    assert opdata.run_command(f"{instance} remove_user {user}", 90_000)["ok"]
+
+    gone = opdata.run_command(f"{instance} is_user_removed {user}", 30_000)
+    if "unrecognized arguments: --state" in gone.get("error", ""):
+        pytest.xfail("slurm-emulator's sacct does not accept --state")
+    assert gone["result"] == "true", gone
 
 
 # --- offerings -----------------------------------------------------------

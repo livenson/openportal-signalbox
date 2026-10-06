@@ -62,7 +62,7 @@ class FakeHealthInfo:
         self.total_completed = fields.get("total_completed", 0)
         self.total_failed = fields.get("total_failed", 0)
         self.engine = "templemeads"
-        self.version = "0.91.0"
+        self.version = "0.93.0"
         self._peers = peers or {}
 
     # A method, not a property — exactly like the real bindings.
@@ -70,10 +70,43 @@ class FakeHealthInfo:
         return self._peers
 
 
+class OpenPortalError(OSError):
+    pass
+
+
+class OpenPortalOtherError(OpenPortalError):
+    pass
+
+
+class ManagedProjectPermissionError(OpenPortalError):
+    pass
+
+
+class ManagedProjectPendingError(ManagedProjectPermissionError):
+    pass
+
+
 class FakeJob:
-    def __init__(self, state, result=""):
+    """A job as ``run()`` hands it back.
+
+    An agent's refusal does not raise from ``run()``: it comes back as a job in
+    state ``error`` whose ``result`` *raises* the typed exception and whose
+    ``error`` returns it. Reading ``result`` unguarded is how the agent's own
+    message used to get lost, so the fake keeps that trap.
+    """
+
+    def __init__(self, state, result="", error=None, error_kind="", result_type=""):
         self.state = state
-        self.result = result
+        self._result = result
+        self.error = error
+        self.error_kind = error_kind
+        self.result_type = result_type
+
+    @property
+    def result(self):
+        if self.error is not None:
+            raise self.error
+        return self._result
 
 
 class FakeOpenPortal(types.ModuleType):

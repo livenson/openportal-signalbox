@@ -83,9 +83,20 @@ plain ES modules. One HTML file, no npm.
 ## The console, and learning the protocol
 
 The preset chips walk the instruction grammar in order — `add_project`,
-`get_project_mapping`, `add_user`, `get_usage_report`, `get_limit`, plus a
-deliberately broken destination so you can watch a routing failure. They share
-one demo project, so running them top to bottom is a working tour.
+`get_project_mapping`, `add_user`, `is_user_added`, `get_usage_report`,
+`get_limit`, `remove_user`, `is_user_removed`, plus a deliberately broken
+destination so you can watch a routing failure. They share one demo project,
+so running them top to bottom is a working tour.
+
+`is_user_added` and `is_user_removed` ask the account, filesystem and scheduler
+agents together, so they are how you find out whether an add or a remove really
+ran everywhere rather than just being acknowledged. Against the test stack
+`is_user_removed` fails after a removal: it asks `sacct --state=…` for running
+jobs, and the Slurm emulator does not accept that flag.
+
+A failure shows the agent's own message and its **kind** (hover for the
+exception class). `award_pending` is drawn amber rather than red: an award
+waiting on a person is to be retried, not fixed.
 
 Presets are **role-aware**. Routers (provider, platform) and the bridge forward
 instructions rather than executing them, so a preset aimed at one is guaranteed
@@ -397,7 +408,7 @@ the base images move under both.
 
 ## Status
 
-A working prototype, developed against OpenPortal 0.91.0 and a Waldur portal.
+A working prototype, developed against OpenPortal 0.91.0–0.93.0 and a Waldur portal.
 
 **Not covered by tests:** the viewer's browser behaviour beyond parsing, and
 anything needing portal software behind the portal agent — `stack.sh` has none,

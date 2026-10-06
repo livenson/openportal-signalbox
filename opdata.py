@@ -622,31 +622,61 @@ def run_command(command, timeout_ms=30000, source=None):
         with use(source) as op:
             job = op.run(command, int(timeout_ms))
     except Exception as exc:
-        # The module surfaces a refused or failed job as an exception carrying
-        # the agent's own message, which is the interesting part.
+        # Raised only when the bridge itself could not be asked - transport or
+        # authentication. An agent's refusal comes back as a job, below.
         return {
             "ok": False,
             "command": command,
             "state": "error",
             "error": str(exc),
+            "error_class": type(exc).__name__,
+            "error_kind": "",
             "elapsed_ms": round((time.monotonic() - started) * 1000),
         }
 
     state = str(attr(job, "state", ""))
+    result_type = str(attr(job, "result_type", "") or "")
     out = {
         "ok": state == "complete",
         "command": command,
         "state": state,
-        "result": str(attr(job, "result", "") or ""),
+        "result": _result_text(job, result_type),
+        "result_type": result_type,
         "elapsed_ms": round((time.monotonic() - started) * 1000),
     }
-    if not out["ok"]:
+    if state == "error":
+        # The agent's own message is the interesting part, and reading
+        # ``result`` on a failed job raises it rather than returning it. The
+        # kind (from 0.92.0) is what separates "pending - ask again later"
+        # from "rejected", which the message alone does not do reliably.
+        error = attr(job, "error")
+        out["error"] = str(error or "") or "the job failed without a message"
+        out["error_class"] = type(error).__name__ if error is not None else ""
+        out["error_kind"] = str(attr(job, "error_kind", "") or "")
+    elif not out["ok"]:
         # A job still pending or running when the wait expires has not
         # succeeded — reporting it as ok would read as a pass. This is the
         # usual shape of an instruction aimed at an agent that cannot be
         # routed to: nothing rejects it, it simply never lands.
         out["error"] = f"job did not complete (state: {state or 'unknown'})"
     return out
+
+
+def _result_text(job, result_type):
+    """A job's answer as text, keeping falsy answers visible.
+
+    ``is_user_added`` answering no is the whole point of asking it, and
+    ``str(value or "")`` would print that as nothing at all.
+    """
+    try:
+        value = job.result
+    except Exception:
+        return ""
+    if value is None:
+        return ""
+    if result_type == "bool":
+        return "true" if value else "false"
+    return str(value)
 
 
 def sync_offering(name, source=None):

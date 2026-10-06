@@ -15,13 +15,13 @@ tree, `diagnostics(destination)` for one agent's jobs, warnings and log.
 ## Commands
 
 ```bash
-python -m pytest                                   # 68 tests, ~5s
+python -m pytest                                   # ~109 tests, ~8s
 python -m pytest tests/test_opdata.py::test_attr_calls_a_method
 python -m pytest -k read_only                      # note the underscores
 ruff check . && ruff format --check .
 
 ./stack.sh up                                      # a real agent network to use
-./live.sh                                          # 22 tests against it
+./live.sh                                          # ~26 tests against it
 ./stack.sh down
 
 ./tui.sh                                           # terminal UI
@@ -191,6 +191,14 @@ answered by the portal software (e.g. Waldur), and the bridge accepts job
 submissions only from *virtual* agents — same-process stand-ins created by
 `sync_offerings`, addressable as `<portal>.<offering>`. `<portal>.<agent-name>`
 is not a route and simply errors. `opdata.sync_offering()` registers one.
+
+**A refusal is a job, not an exception.** `run()` raises only when the bridge
+itself could not be asked. An agent's failure comes back as a job in state
+`error` whose `result` *raises* the typed exception and whose `error` returns
+it, with `error_kind` (0.92.0+) as the stable discriminant — `award_pending`
+is the one that matters, because pending means retry. `run_command()` reads
+`error`, never `result`, on a failed job; reading `result` is how the agent's
+message used to vanish behind "did not complete". The fake reproduces this.
 
 **A non-terminal job is not a success.** An instruction aimed at an unroutable
 agent is never rejected — it just never lands. `run_command()` maps any state
