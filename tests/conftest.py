@@ -62,7 +62,7 @@ class FakeHealthInfo:
         self.total_completed = fields.get("total_completed", 0)
         self.total_failed = fields.get("total_failed", 0)
         self.engine = "templemeads"
-        self.version = "0.91.0"
+        self.version = "0.93.0"
         self._peers = peers or {}
 
     # A method, not a property — exactly like the real bindings.
@@ -70,10 +70,43 @@ class FakeHealthInfo:
         return self._peers
 
 
+class OpenPortalError(OSError):
+    pass
+
+
+class OpenPortalOtherError(OpenPortalError):
+    pass
+
+
+class ManagedProjectPermissionError(OpenPortalError):
+    pass
+
+
+class ManagedProjectPendingError(ManagedProjectPermissionError):
+    pass
+
+
 class FakeJob:
-    def __init__(self, state, result=""):
+    """A job as ``run()`` hands it back.
+
+    An agent's refusal does not raise from ``run()``: it comes back as a job in
+    state ``error`` whose ``result`` *raises* the typed exception and whose
+    ``error`` returns it. Reading ``result`` unguarded is how the agent's own
+    message used to get lost, so the fake keeps that trap.
+    """
+
+    def __init__(self, state, result="", error=None, error_kind="", result_type=""):
         self.state = state
-        self.result = result
+        self._result = result
+        self.error = error
+        self.error_kind = error_kind
+        self.result_type = result_type
+
+    @property
+    def result(self):
+        if self.error is not None:
+            raise self.error
+        return self._result
 
 
 class FakeOpenPortal(types.ModuleType):
@@ -88,6 +121,11 @@ class FakeOpenPortal(types.ModuleType):
         self.next_job = FakeJob("complete", "ok")
         self.runs = []
         self.synced = []
+        self.invite = None
+        self.calls = []
+        # invite path -> health root, for tests that watch two deployments
+        self.trees = {}
+        self.fails = ""
 
     # config
     def is_config_loaded(self):
@@ -95,9 +133,19 @@ class FakeOpenPortal(types.ModuleType):
 
     def load_config(self, path):
         self.loaded = True
+        # Which invite was loaded last, and the order of every load and read.
+        # Switching deployments means overwriting a process-wide singleton in
+        # the real client, so the order is the thing worth asserting.
+        self.invite = str(path)
+        self.calls.append(("load", str(path)))
+        if self.trees:
+            self.health_root = self.trees.get(str(path), self.health_root)
 
     # reads
     def health(self):
+        self.calls.append(("health", self.invite))
+        if self.fails:
+            raise RuntimeError(self.fails)
         root = self.health_root
         return types.SimpleNamespace(detail=root, is_healthy=lambda: True)
 
@@ -133,7 +181,51 @@ def fake_openportal(monkeypatch):
     import opdata
 
     monkeypatch.setattr(opdata, "READONLY", False, raising=False)
+    # Both caches are process-wide: the resolved deployment list, and which
+    # invite the client last loaded. A test that does not reset them inherits
+    # the previous test's estate.
+    monkeypatch.setattr(opdata, "_resolved", None, raising=False)
+    monkeypatch.setattr(opdata, "_loaded", None, raising=False)
+    # An operator's own signalbox.toml sits beside the scripts - the README
+    # tells them to put it there - and would otherwise resolve as the estate
+    # under test. Tests declare their deployments or get the single default.
+    monkeypatch.setattr(opdata, "CONFIG", "", raising=False)
+    monkeypatch.setattr(opdata, "INVITES", "", raising=False)
+    monkeypatch.setattr(opdata, "_config_path", lambda: None)
     return fake
+
+
+@pytest.fixture
+def two_deployments(fake_openportal, tmp_path, monkeypatch):
+    """Two estates whose agents share names, each behind its own invite.
+
+    Both have a ``bridge`` and a ``portal``: that collision is the reason nodes
+    carry a source-qualified key.
+    """
+    import opdata
+
+    invites = {}
+    for name in ("rp", "efp"):
+        portal = FakeHealthInfo(name, "portal")
+        bridge = FakeHealthInfo("bridge", "bridge")
+        bridge._peers = {name: portal}
+        portal._peers = {"bridge": bridge}
+        invite = tmp_path / f"{name}-invite.toml"
+        invite.write_text("url = 'http://127.0.0.1/'\n")
+        invites[name] = str(invite)
+        fake_openportal.trees[str(invite)] = bridge
+
+    monkeypatch.setattr(
+        opdata,
+        "_resolved",
+        (
+            [opdata.Source("rp", invites["rp"]), opdata.Source("efp", invites["efp"])],
+            [opdata.Link("rp", "efp", zone="rp>efp")],
+        ),
+        raising=False,
+    )
+    fake_openportal.health_root = fake_openportal.trees[invites["rp"]]
+    return fake_openportal, invites
 
 
 @pytest.fixture

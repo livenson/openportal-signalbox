@@ -513,3 +513,43 @@ def test_every_topology_keeps_a_discoverable_bridge(name):
     """
     agents, _ = topology(name)
     assert "bridge" in agents and agents["bridge"]["binary"] == "op-bridge"
+
+
+def test_every_launcher_has_a_native_branch():
+    """A deployment whose agents run on the host has no container to discover.
+
+    The launchers must then run the tool here rather than refusing, which is
+    the whole point of resolve_native() sitting ahead of container discovery.
+    """
+    for name in ("run.sh", "tui.sh", "live.sh"):
+        script = (ROOT / name).read_text()
+        assert "if resolve_native; then" in script, f"{name} has no native branch"
+        assert script.index("resolve_native") < script.index("resolve_target"), (
+            f"{name} looks for a container before honouring an invite it was given"
+        )
+
+
+def test_native_mode_does_not_reintroduce_a_second_version_default():
+    """The native venv installs the same pin the Docker path does."""
+    detect = (ROOT / "detect.sh").read_text()
+    assert "openportal==${OPENPORTAL_VERSION}" in detect
+    assert re.search(r"OPENPORTAL_VERSION=\"?\$\{OPENPORTAL_VERSION:-", detect) is None
+
+
+def test_an_operator_supplied_interpreter_is_used_as_it_is():
+    """A native deployment often already has a matching client in a venv.
+
+    Installing into it (or ignoring it and building another) would either
+    fight that environment or silently run a different release against it.
+    """
+    detect = (ROOT / "detect.sh").read_text()
+    body = detect.split("native_python()")[1]
+    guard = body.index("SIGNALBOX_PYTHON")
+    assert guard < body.index('pip" install'), "SIGNALBOX_PYTHON must short-circuit the install"
+
+
+def test_the_launcher_image_can_parse_the_config_file():
+    """tomllib arrived in 3.11; the deployment list is TOML."""
+    for name in ("run.sh", "tui.sh", "live.sh"):
+        script = (ROOT / name).read_text()
+        assert "python:3.10-slim" not in script, f"{name} cannot read signalbox.toml"

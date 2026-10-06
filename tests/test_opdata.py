@@ -7,7 +7,14 @@ job reported as successful when it had not finished.
 """
 
 import pytest
-from conftest import FakeHealthInfo, FakeJob, FakeLogEntry, FakeReport
+from conftest import (
+    FakeHealthInfo,
+    FakeJob,
+    FakeLogEntry,
+    FakeReport,
+    ManagedProjectPendingError,
+    OpenPortalOtherError,
+)
 
 import opdata
 
@@ -72,7 +79,15 @@ def test_topology_records_depth_per_hop(chain):
 
 
 def test_topology_edges_follow_the_chain(chain):
-    edges = {(e["source"], e["target"]) for e in opdata.topology()["edges"]}
+    """Edges are drawn between node keys, not agent names.
+
+    A name is only unique inside one deployment - two of them both have a
+    ``bridge`` - so the name-to-node mapping the front ends used to do
+    themselves happens here, where the deployment is still known.
+    """
+    data = opdata.topology()
+    name_of = {n["key"]: n["name"] for n in data["nodes"]}
+    edges = {(name_of[e["source"]], name_of[e["target"]]) for e in data["edges"]}
     assert ("bridge", "waldur") in edges
     assert ("waldur", "provider") in edges
     assert ("provider", "cluster") in edges
@@ -198,10 +213,52 @@ def test_unfinished_job_is_not_reported_as_success(fake_openportal):
 
 
 def test_run_surfaces_the_agents_error(fake_openportal):
-    fake_openportal.next_job = OSError("Project does not exist")
+    """A refusal is a job in state error, and its ``result`` raises.
+
+    Reading ``result`` and reporting the state instead is how the agent's own
+    message was lost: the console said "did not complete" and nothing else.
+    """
+    fake_openportal.next_job = FakeJob(
+        "error",
+        error=OpenPortalOtherError("Project does not exist: nope.waldur"),
+        error_kind="unknown",
+        result_type="Error",
+    )
     out = opdata.run_command("dest get_project_mapping nope")
     assert out["ok"] is False
-    assert "Project does not exist" in out["error"]
+    assert out["error"] == "Project does not exist: nope.waldur"
+    assert out["error_class"] == "OpenPortalOtherError"
+    assert out["error_kind"] == "unknown"
+    assert out["result"] == ""
+
+
+def test_run_tells_pending_from_a_failure(fake_openportal):
+    """Pending means ask again later; the kind is what says so."""
+    fake_openportal.next_job = FakeJob(
+        "error",
+        error=ManagedProjectPendingError("awaiting approval"),
+        error_kind="award_pending",
+    )
+    out = opdata.run_command("waldur.site get_project_mapping p.waldur")
+    assert out["error_kind"] == "award_pending"
+    assert out["error_class"] == "ManagedProjectPendingError"
+
+
+def test_run_keeps_a_false_answer_visible(fake_openportal):
+    """``is_user_added`` answering no is the answer, not an empty result."""
+    fake_openportal.next_job = FakeJob("complete", 0, result_type="bool")
+    out = opdata.run_command("dest is_user_added u.p.waldur")
+    assert out["ok"] is True
+    assert out["result"] == "false"
+    assert out["result_type"] == "bool"
+
+
+def test_run_reports_a_bridge_that_could_not_be_asked(fake_openportal):
+    fake_openportal.next_job = OSError("401 Unauthorized")
+    out = opdata.run_command("dest add_project p")
+    assert out["ok"] is False
+    assert "401" in out["error"]
+    assert out["error_class"] == "OSError"
 
 
 def test_run_rejects_an_empty_command(fake_openportal):

@@ -17,20 +17,30 @@ set -euo pipefail
 
 # shellcheck source=detect.sh
 . "$(cd "$(dirname "$0")" && pwd)/detect.sh"
-resolve_target
 HERE="$(cd "$(dirname "$0")" && pwd)"
+
+if resolve_native; then
+    PYTHON="$(native_python "$HERE" pytest)"
+    cd "$HERE"
+    exec env SIGNALBOX_LIVE=1 SIGNALBOX_READONLY="${SIGNALBOX_READONLY:-}" \
+        OPENPORTAL_VERSION="$OPENPORTAL_VERSION" \
+        "$PYTHON" -m pytest tests/test_live.py -v -m live -p no:cacheprovider "${@:-}"
+fi
+
+resolve_target
 
 exec docker run --rm \
     --name signalbox-live \
     --network "$NETWORK" \
     -e SIGNALBOX_LIVE=1 \
+    -e SIGNALBOX_CONFIG=none \
     -e SIGNALBOX_READONLY="${SIGNALBOX_READONLY:-}" \
     -e OPENPORTAL_VERSION="$OPENPORTAL_VERSION" \
     -e PYTHONDONTWRITEBYTECODE=1 \
     -v "${INVITE_VOLUME}:/inv:ro" \
     -v "${HERE}:/app:ro" \
     -w /app \
-    python:3.10-slim \
+    python:3.12-slim \
     sh -c "pip install --quiet --disable-pip-version-check \
              openportal==${OPENPORTAL_VERSION} pytest \
            && python -m pytest tests/test_live.py -v -m live -p no:cacheprovider ${*:-}"

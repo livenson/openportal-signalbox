@@ -11,8 +11,15 @@ set -euo pipefail
 
 # shellcheck source=detect.sh
 . "$(cd "$(dirname "$0")" && pwd)/detect.sh"
-resolve_target
 HERE="$(cd "$(dirname "$0")" && pwd)"
+
+if resolve_native; then
+    PYTHON="$(native_python "$HERE" textual)"
+    cd "$HERE"
+    exec "$PYTHON" tui.py
+fi
+
+resolve_target
 
 if [ ! -t 1 ]; then
     echo "This is a terminal UI — run it from a terminal." >&2
@@ -22,10 +29,11 @@ fi
 exec docker run --rm -it \
     --name signalbox-tui \
     --network "$NETWORK" \
+    -e SIGNALBOX_CONFIG=none \
     -e TERM="${TERM:-xterm-256color}" \
     -e COLORTERM="${COLORTERM:-truecolor}" \
     -v "${INVITE_VOLUME}:/inv:ro" \
     -v "${HERE}:/app:ro" \
     -w /app \
-    python:3.10-slim \
+    python:3.12-slim \
     sh -c "pip install --quiet --disable-pip-version-check openportal==${OPENPORTAL_VERSION} textual && python tui.py"

@@ -99,7 +99,63 @@ def test_config_reports_the_write_posture(client):
     call, _ = client
     status, body = call("/api/config")
     assert status == 200
-    assert body == {"readonly": False}
+    assert body["readonly"] is False
+
+
+def test_config_lists_the_deployments(client):
+    """The page needs the names to label nodes and to address calls."""
+    call, _ = client
+    _status, body = call("/api/config")
+    assert [src["name"] for src in body["sources"]] == ["default"]
+
+
+def test_the_source_reaches_the_data_layer(client, monkeypatch):
+    call, server = client
+    seen = []
+
+    def fake_detail(path, level=None, search=None, source=None):
+        seen.append((path, source))
+        return {"ok": True}
+
+    monkeypatch.setattr(server, "agent_detail", fake_detail)
+    call("/api/agent?path=a&source=efp")
+    assert seen == [("a", "efp")]
+
+
+def test_cache_is_keyed_by_the_source(client, monkeypatch):
+    """Both deployments have an agent called "portal"; one cache entry would
+    hand the other deployment's diagnostics back."""
+    call, server = client
+    seen = []
+
+    def fake_detail(path, level=None, search=None, source=None):
+        seen.append(source)
+        return {"ok": True, "source": source}
+
+    monkeypatch.setattr(server, "agent_detail", fake_detail)
+    call("/api/agent?path=portal&source=rp")
+    _status, body = call("/api/agent?path=portal&source=efp")
+    call("/api/agent?path=portal&source=rp")  # served from cache
+    assert seen == ["rp", "efp"]
+    assert body["source"] == "efp"
+
+
+def test_the_source_reaches_run_and_registration(client, monkeypatch):
+    call, server = client
+    seen = []
+    monkeypatch.setattr(
+        server,
+        "run_command",
+        lambda cmd, timeout, source=None: seen.append(("run", source)) or {"ok": True},
+    )
+    monkeypatch.setattr(
+        server,
+        "sync_offering",
+        lambda name, source=None: seen.append(("offering", source)) or {"ok": True},
+    )
+    call("/api/run", {"command": "dest add_project p", "source": "efp"})
+    call("/api/run", {"offering": "demo", "source": "rp"})
+    assert seen == [("run", "efp"), ("offering", "rp")]
 
 
 def test_run_submits_the_command(client, fake_openportal):
@@ -140,3 +196,23 @@ def test_posting_anywhere_else_is_404(client):
     call, _ = client
     status, _body = call("/api/nope", {"command": "x"})
     assert status == 404
+
+
+def test_offerings_are_read_per_deployment(client, monkeypatch):
+    """What the zone on a portal link exists to carry.
+
+    An offering is registered as a virtual agent in the pair's zone, so an
+    award only arrives while that registration stands — which makes the list
+    the useful thing to show beside the link, and it is per portal.
+    """
+    call, server = client
+    seen = []
+    monkeypatch.setattr(
+        server, "offerings", lambda source=None: seen.append(source) or [f"demo.{source}"]
+    )
+    status, body = call("/api/offerings?source=efp")
+    assert status == 200
+    assert body == ["demo.efp"]
+    call("/api/offerings?source=rp")
+    call("/api/offerings?source=efp")  # served from cache
+    assert seen == ["efp", "rp"]

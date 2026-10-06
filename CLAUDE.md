@@ -15,13 +15,13 @@ tree, `diagnostics(destination)` for one agent's jobs, warnings and log.
 ## Commands
 
 ```bash
-python -m pytest                                   # 68 tests, ~5s
+python -m pytest                                   # ~109 tests, ~8s
 python -m pytest tests/test_opdata.py::test_attr_calls_a_method
 python -m pytest -k read_only                      # note the underscores
 ruff check . && ruff format --check .
 
 ./stack.sh up                                      # a real agent network to use
-./live.sh                                          # 22 tests against it
+./live.sh                                          # ~26 tests against it
 ./stack.sh down
 
 ./tui.sh                                           # terminal UI
@@ -34,8 +34,14 @@ The default suite needs no OpenPortal network — it fakes the module (see
 Testing). `live.sh`, `tui.sh` and `run.sh` need a real one, which `stack.sh`
 will build.
 
-Environment read by the code: `OPENPORTAL_BRIDGE_INVITE`, `SIGNALBOX_READONLY`,
-`PORT`, `CACHE_TTL`, `SIGNALBOX_LIVE`.
+Environment read by the code: `OPENPORTAL_BRIDGE_INVITE`, `SIGNALBOX_CONFIG`,
+`SIGNALBOX_INVITES`, `SIGNALBOX_PYTHON`, `SIGNALBOX_READONLY`, `PORT`,
+`CACHE_TTL`, `SIGNALBOX_LIVE`.
+
+`SIGNALBOX_CONFIG=none` means "no config file". The container launchers always
+pass it: they bind-mount this directory, so a git-ignored `signalbox.toml`
+kept here for native deployments would otherwise win inside the stack
+container too, and `live.sh` would aim its writes at those deployments.
 
 ## The version pin
 
@@ -61,12 +67,28 @@ in `tests/conftest.py`, then `./stack.sh down && ./stack.sh up && ./live.sh` —
 `test_agents_report_the_version_the_launchers_installed` is what notices a
 stale image.
 
-## Why the launchers use Docker
+The README screenshots show agent versions, so a bump makes them stale too.
+`docs/capture.py` regenerates all of them from a live stack (`chain`, then
+`multi-allocator`) - read its docstring first: it encodes why the load is one
+sequential loop, why the shots wait past the second poll and half a poll off
+the next, and why each topology needs a freshly started stack (failure counts
+are cumulative, and the console shot fails an instruction on purpose).
 
-`op-bridge` listens only inside the agent network, and every call to it is
-signed with the HMAC key from the invite file. So the tools cannot run on the
-host: `run.sh`, `tui.sh` and `live.sh` start a container *on that network* with
-the invite volume mounted. `detect.sh` finds both by locating a running
+## Docker by default, native when you hold the invite
+
+`op-bridge` in a Compose deployment listens only inside the agent network, and
+every call to it is signed with the HMAC key from the invite file. So the tools
+cannot run on the host there: `run.sh`, `tui.sh` and `live.sh` start a
+container *on that network* with the invite volume mounted.
+
+That reasoning is about the network, not about Docker. When the agents run
+natively the bridge is reachable from the host and the invite is a path here,
+so `resolve_native()` in `detect.sh` runs ahead of container discovery: an
+invite that exists (via `SIGNALBOX_CONFIG`, `SIGNALBOX_INVITES` or
+`OPENPORTAL_BRIDGE_INVITE`) sets `NATIVE=1` and the launcher runs the Python
+directly, in `SIGNALBOX_PYTHON` if given, else a `.venv-signalbox` filled from
+the same single version pin. No invite means today's Docker path, unchanged —
+which is why the auto-detect is by invite and not by a flag nobody would pass. `detect.sh` finds both by locating a running
 container labelled `com.docker.compose.service=op-bridge` and taking the invite
 volume *from that same container's mounts* — resolving the two independently
 pairs one stack's network with another's key when more than one is up, which
@@ -77,6 +99,25 @@ therefore held to those two names by `tests/test_stack.py`.
 Consequence when editing: the Python files are bind-mounted read-only into the
 container, so an edit needs `docker restart signalbox` (graph view) or a
 relaunch (TUI) — not a rebuild.
+
+## One client, one bridge at a time
+
+The Python client keeps its bridge configuration in a process-global
+(`python/src/lib.rs`: `static SINGLETON_CONFIG: Lazy<RwLock<Option<BridgeConfig>>>`);
+`load_config()` overwrites it. One process therefore addresses one deployment
+at a time, while `server.py` is a `ThreadingHTTPServer`. So **every** bridge
+call in `opdata.py` goes through `use(source)`, which takes `_BRIDGE_LOCK`,
+switches the singleton if needed, and holds the lock across the call. Making a
+call outside that context manager is the bug this design exists to prevent: a
+second thread switches the config underneath the first, which then reads
+another deployment's estate under this one's name, silently.
+
+Consequences worth knowing before "optimising" it: deployments are polled in
+sequence, not in parallel; and node identity has to be qualified, because two
+deployments routinely both have an agent named `portal`. `walk()` stays
+name-keyed per tree (it is protocol truth, and tests call it directly);
+`source_topology()` adds `source` and `key`, and maps the edges onto keys, so
+the front ends never see a bare name.
 
 ## The test stack
 
@@ -157,6 +198,14 @@ answered by the portal software (e.g. Waldur), and the bridge accepts job
 submissions only from *virtual* agents — same-process stand-ins created by
 `sync_offerings`, addressable as `<portal>.<offering>`. `<portal>.<agent-name>`
 is not a route and simply errors. `opdata.sync_offering()` registers one.
+
+**A refusal is a job, not an exception.** `run()` raises only when the bridge
+itself could not be asked. An agent's failure comes back as a job in state
+`error` whose `result` *raises* the typed exception and whose `error` returns
+it, with `error_kind` (0.92.0+) as the stable discriminant — `award_pending`
+is the one that matters, because pending means retry. `run_command()` reads
+`error`, never `result`, on a failed job; reading `result` is how the agent's
+message used to vanish behind "did not complete". The fake reproduces this.
 
 **A non-terminal job is not a success.** An instruction aimed at an unroutable
 agent is never rejected — it just never lands. `run_command()` maps any state

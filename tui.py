@@ -62,6 +62,9 @@ class AgentsPane(Vertical):
         table = self.query_one("#agents", DataTable)
         for label, width in (
             ("agent", 13),
+            # Hidden when there is one deployment, so the common case is
+            # unchanged; with two, "portal" alone does not identify a row.
+            *((("site", 8),) if len(opdata.sources()) > 1 else ()),
             ("type", 10),
             ("state", 5),
             ("up", 6),
@@ -180,9 +183,9 @@ class OpenPortalTUI(App):
         self.call_from_thread(self.apply_topology, data)
 
     @work(exclusive=True, thread=True)
-    def refresh_detail(self, path: str) -> None:
+    def refresh_detail(self, path: str, source: str | None = None) -> None:
         try:
-            detail = opdata.agent_detail(path, include_self=self.include_self)
+            detail = opdata.agent_detail(path, include_self=self.include_self, source=source)
         except Exception as exc:
             detail = {"ok": False, "error": str(exc)}
         self.call_from_thread(self.apply_detail, detail)
@@ -191,7 +194,10 @@ class OpenPortalTUI(App):
     def refresh_logs(self) -> None:
         level = (self.query_one("#level", Input).value or "").strip() or None
         search = (self.query_one("#search", Input).value or "").strip() or None
-        paths = [(n["id"], n["name"]) for n in self.nodes]
+        paths = [
+            (n["id"], f"{n['source']}/{n['name']}" if self.several else n["name"], n.get("source"))
+            for n in self.nodes
+        ]
         try:
             rows = opdata.merged_logs(paths, level, search, include_self=self.include_self)
         except Exception:
@@ -219,6 +225,7 @@ class OpenPortalTUI(App):
 
             table.add_row(
                 node["name"],
+                *((node.get("source", ""),) if self.several else ()),
                 str(node["type"]),
                 f"[{style}]{state}[/]",
                 humanise(node["uptime_seconds"]),
@@ -226,7 +233,7 @@ class OpenPortalTUI(App):
                 str(node["jobs"]["running"]),
                 f"[yellow]{failed}[/]" if failed else "0",
                 f"{node['job_time_mean_ms']:.0f}",
-                key=node["id"],
+                key=node["key"],
             )
 
         if self.nodes:
@@ -240,7 +247,11 @@ class OpenPortalTUI(App):
             node = self.nodes[index]
             self.selected = node
             self.render_detail_header(node)
-            self.refresh_detail(node["id"])
+            self.refresh_detail(node["id"], node.get("source"))
+
+    @property
+    def several(self) -> bool:
+        return len(opdata.sources()) > 1
 
     def render_detail_header(self, node) -> None:
         mb = node["memory_bytes"] / 1048576
