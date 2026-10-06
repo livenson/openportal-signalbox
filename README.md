@@ -98,6 +98,12 @@ A failure shows the agent's own message and its **kind** (hover for the
 exception class). `award_pending` is drawn amber rather than red: an award
 waiting on a person is to be retried, not fixed.
 
+![console history: a refused instruction with its kind and message, and is_user_added answering false then true](docs/console.png)
+
+Newest first: `add_project`, then `is_user_added` before and after `add_user`
+(`false`, then `true`, typed `bool`), then a mapping for a project that does
+not exist, refused with the agent's own words.
+
 Presets are **role-aware**. Routers (provider, platform) and the bridge forward
 instructions rather than executing them, so a preset aimed at one is guaranteed
 to fail; each preset knows which agent role can answer it and targets

@@ -67,6 +67,13 @@ in `tests/conftest.py`, then `./stack.sh down && ./stack.sh up && ./live.sh` —
 `test_agents_report_the_version_the_launchers_installed` is what notices a
 stale image.
 
+The README screenshots show agent versions, so a bump makes them stale too.
+`docs/capture.py` regenerates all of them from a live stack (`chain`, then
+`multi-allocator`) - read its docstring first: it encodes why the load is one
+sequential loop, why the shots wait past the second poll and half a poll off
+the next, and why each topology needs a freshly started stack (failure counts
+are cumulative, and the console shot fails an instruction on purpose).
+
 ## Docker by default, native when you hold the invite
 
 `op-bridge` in a Compose deployment listens only inside the agent network, and
