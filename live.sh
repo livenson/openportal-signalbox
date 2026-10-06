@@ -33,6 +33,7 @@ exec docker run --rm \
     --name signalbox-live \
     --network "$NETWORK" \
     -e SIGNALBOX_LIVE=1 \
+    -e SIGNALBOX_CONFIG=none \
     -e SIGNALBOX_READONLY="${SIGNALBOX_READONLY:-}" \
     -e OPENPORTAL_VERSION="$OPENPORTAL_VERSION" \
     -e PYTHONDONTWRITEBYTECODE=1 \

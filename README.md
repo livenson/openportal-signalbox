@@ -297,6 +297,11 @@ next to the summary; the other one still draws.
 `SIGNALBOX_INVITES="rp=/a.toml,efp=/b.toml"` does the same without a file, for
 a shell that has no TOML parser to hand.
 
+A `signalbox.toml` beside the scripts wins over the stack, and `./live.sh`
+would run its writing tests against the deployments it lists.
+`SIGNALBOX_CONFIG=none` sets it aside for one command:
+`SIGNALBOX_CONFIG=none ./live.sh` reaches the stack again.
+
 **What `zone` is.** Half of an agent's identity: peers are `name@zone`
 (`Peer { name, zone }`), and every connect, watchdog, job and diagnostics hop
 carries it — the same agent name can appear in more than one zone and they are

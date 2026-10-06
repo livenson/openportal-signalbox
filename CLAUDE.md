@@ -38,6 +38,11 @@ Environment read by the code: `OPENPORTAL_BRIDGE_INVITE`, `SIGNALBOX_CONFIG`,
 `SIGNALBOX_INVITES`, `SIGNALBOX_PYTHON`, `SIGNALBOX_READONLY`, `PORT`,
 `CACHE_TTL`, `SIGNALBOX_LIVE`.
 
+`SIGNALBOX_CONFIG=none` means "no config file". The container launchers always
+pass it: they bind-mount this directory, so a git-ignored `signalbox.toml`
+kept here for native deployments would otherwise win inside the stack
+container too, and `live.sh` would aim its writes at those deployments.
+
 ## The version pin
 
 `openportal.env` holds the release everything is built and installed from, and

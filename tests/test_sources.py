@@ -46,6 +46,26 @@ def test_a_lone_invite_is_one_unnamed_deployment(monkeypatch):
     assert opdata.links() == []
 
 
+def test_none_sets_aside_a_config_file_kept_here(tmp_path, monkeypatch):
+    """What the container launchers pass, so the stack's own invite wins.
+
+    They bind-mount this directory, so a signalbox.toml kept beside the scripts
+    for native deployments is visible inside the container - and live.sh would
+    otherwise aim its writes at those deployments instead of the stack.
+    """
+    (tmp_path / "signalbox.toml").write_text(
+        '[[deployment]]\nname = "real"\ninvite = "/somewhere/else.toml"\n'
+    )
+    monkeypatch.setattr(opdata, "HERE", tmp_path)
+    monkeypatch.setattr(opdata, "CONFIG", opdata.NO_CONFIG)
+    monkeypatch.setattr(opdata, "INVITES", "")
+    monkeypatch.setattr(opdata, "INVITE", "/inv/bridge-invite.toml")
+    monkeypatch.setattr(opdata, "_resolved", None)
+
+    [source] = opdata.sources()
+    assert source.invite == "/inv/bridge-invite.toml"
+
+
 def test_the_env_list_names_several_deployments(monkeypatch):
     monkeypatch.setattr(opdata, "CONFIG", "")
     monkeypatch.setattr(opdata, "INVITES", "rp=/tmp/rp.toml, efp=/tmp/efp.toml")

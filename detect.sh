@@ -60,7 +60,10 @@ resolve_native() {
     local here
     here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-    if [ -z "$config" ] && [ -f "$here/signalbox.toml" ]; then
+    # "none" sets aside a signalbox.toml kept here, to reach the stack instead.
+    if [ "$config" = "none" ]; then
+        config=""
+    elif [ -z "$config" ] && [ -f "$here/signalbox.toml" ]; then
         config="$here/signalbox.toml"
     fi
 

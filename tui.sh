@@ -29,6 +29,7 @@ fi
 exec docker run --rm -it \
     --name signalbox-tui \
     --network "$NETWORK" \
+    -e SIGNALBOX_CONFIG=none \
     -e TERM="${TERM:-xterm-256color}" \
     -e COLORTERM="${COLORTERM:-truecolor}" \
     -v "${INVITE_VOLUME}:/inv:ro" \

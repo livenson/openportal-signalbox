@@ -39,6 +39,7 @@ exec docker run --rm $TTY_FLAGS \
     --network "$NETWORK" \
     -p "${PORT}:${PORT}" \
     -e PORT="$PORT" \
+    -e SIGNALBOX_CONFIG=none \
     -e SIGNALBOX_READONLY="${SIGNALBOX_READONLY:-}" \
     -v "${INVITE_VOLUME}:/inv:ro" \
     -v "${HERE}:/app:ro" \

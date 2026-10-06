@@ -78,7 +78,15 @@ def _load_toml(path):
         return toml_reader.load(handle)
 
 
+# The container launchers bind-mount this directory, so a signalbox.toml kept
+# here for native deployments is visible inside the stack container too and
+# would win over the stack's own invite. They pass this to say "no file".
+NO_CONFIG = "none"
+
+
 def _config_path():
+    if CONFIG == NO_CONFIG:
+        return None
     if CONFIG:
         return Path(CONFIG)
     default = HERE / "signalbox.toml"
