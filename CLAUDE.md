@@ -301,3 +301,8 @@ already happened once. Do not add comments restating what the next line does.
 
 `opdata.py` is shared by both front ends; keep protocol knowledge there rather
 than duplicating it into `server.py` or `tui.py`.
+
+`README.md` is the overview: what it is, how to start, the two views, and an
+index. Detail belongs in `docs/` (`console.md`, `test-stack.md`,
+`deployments.md`, `troubleshooting.md`, `development.md`) - add to those rather
+than growing the README back.

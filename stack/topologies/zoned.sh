@@ -17,7 +17,7 @@
 # here they cannot reach anything of each other's, by construction.
 #
 # What this is for is finding out what one signalbox sees of such a host, which
-# is not obvious before you run it — see the README.
+# is not obvious before you run it — see docs/test-stack.md.
 AGENTS=(
     "bridge:bridge:8044:op-bridge"
     "portal:waldur:8040:op-portal"

@@ -75,7 +75,7 @@ for entry in "${AGENTS[@]}"; do
         # no portal software behind this stack to receive either. The agents
         # then keep their default notification URL, which nothing serves, and
         # log "Dropping notification ... after 3 failed signal attempts" — the
-        # noise the README calls out as harmless is therefore visible here too,
+        # noise docs/troubleshooting.md calls out as harmless is therefore visible here too,
         # which is the point of a stack you can reproduce reports against.
         extra_args=(
             --bridge-url "http://$(host "$dir"):3000"
